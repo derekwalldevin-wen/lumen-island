@@ -1,0 +1,13 @@
+《灯火小岛》最简单的打开方式：
+
+1. 双击这个文件：打开游戏.cmd
+   或双击：play.cmd
+   或直接双击：play-lumen-island.html
+
+2. 浏览器会打开游戏，不需要安装 Node.js，不需要运行命令，也不需要联网。
+
+如果浏览器没有自动打开：
+- 右键 play-lumen-island.html
+- 选择“打开方式”→“Microsoft Edge”或“Google Chrome”
+
+开发者版本仍可用 start-local.cmd 启动。
