@@ -224,6 +224,20 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: n
   }
 }
 
+/** Blends two hex colours; `amount` 0 returns `from`, 1 returns `to`. */
+function mixHex(from: string, to: string, amount: number): string {
+  const parse = (hex: string) => {
+    const normalized = hex.replace('#', '');
+    const value = Number.parseInt(normalized, 16);
+    return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+  };
+  const [r1, g1, b1] = parse(from);
+  const [r2, g2, b2] = parse(to);
+  const t = Math.min(1, Math.max(0, amount));
+  const channel = (a: number, b: number) => Math.round(a + (b - a) * t);
+  return `rgb(${channel(r1, r2)}, ${channel(g1, g2)}, ${channel(b1, b2)})`;
+}
+
 function drawStarburst(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, color: string, time: number): void {
   ctx.save();
   ctx.globalCompositeOperation = 'screen';
@@ -240,8 +254,14 @@ function drawStarburst(ctx: CanvasRenderingContext2D, x: number, y: number, radi
   ctx.restore();
 }
 
+/**
+ * Two-part contact shadow: a wide soft ambient pool plus a tight dark core where
+ * the body actually meets the ground. The core is what stops figures from
+ * appearing to hover over the terrain.
+ */
 function drawShadow(ctx: CanvasRenderingContext2D, x: number, y: number, rx: number, alpha = 0.25): void {
   ellipse(ctx, x, y + 2, rx, rx * 0.32, `rgba(10, 19, 33, ${alpha})`);
+  ellipse(ctx, x, y + 2, rx * 0.58, rx * 0.17, `rgba(6, 13, 24, ${Math.min(0.5, alpha * 1.5)})`);
 }
 
 function drawFace(ctx: CanvasRenderingContext2D, x: number, y: number, spacing: number, expression: 'calm' | 'angry' | 'hurt' = 'calm'): void {
@@ -444,31 +464,72 @@ function drawTree(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle): void 
   const y = obstacle.y + obstacle.h;
   const seed = obstacle.seed ?? hashString(`${obstacle.x}:${obstacle.y}`);
   const random = new SeededRandom(seed);
-  drawShadow(ctx, x, y - 2, obstacle.w * 0.54, 0.3);
+  // Per-tree personality so a grove does not read as one stamp repeated.
+  const lean = random.range(-7, 7);
+  const layers = 3 + (random.next() > 0.62 ? 1 : 0);
+  const hueShift = random.range(-0.06, 0.06);
+  const palette = [
+    mixHex('#2b4b52', hueShift > 0 ? '#2f5a52' : '#27414f', Math.abs(hueShift) * 8),
+    mixHex('#3f6b62', hueShift > 0 ? '#4a7a63' : '#375c60', Math.abs(hueShift) * 8),
+    mixHex('#5a8a72', hueShift > 0 ? '#6b9a74' : '#4f7a70', Math.abs(hueShift) * 8),
+  ];
+
+  drawShadow(ctx, x + lean * 0.3, y - 2, obstacle.w * 0.54, 0.32);
   softLight(ctx, x, y - 40, obstacle.w * 0.8, obstacle.h * 0.8, '#b9e0c0', 0.09);
-  roundRect(ctx, x - 7, y - 42, 14, 44, 5, linear(ctx, x - 8, y - 40, x + 9, y, '#3f4a43', '#75674f'), '#0f1c2e', 3);
-  drawSurfaceTexture(ctx, x - 7, y - 40, 14, 40, '#d4c08d', seed, 'wood');
-  for (let layer = 0; layer < 3; layer += 1) {
-    const width = obstacle.w * (0.44 - layer * 0.06);
+
+  // Trunk leans, with a root flare and two bare branches for silhouette interest.
+  const trunkHeight = 44;
+  pathFill(ctx, [
+    [x - 9, y],
+    [x - 6, y - trunkHeight],
+    [x + 6, y - trunkHeight],
+    [x + 9, y],
+  ], linear(ctx, x - 9, y - trunkHeight, x + 9, y, '#3f4a43', '#75674f'), '#0f1c2e', 3);
+  drawSurfaceTexture(ctx, x - 7, y - trunkHeight + 2, 14, trunkHeight - 4, '#d4c08d', seed, 'wood');
+  ctx.strokeStyle = '#4a5148';
+  ctx.lineWidth = 3.4;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x + lean * 0.4, y - trunkHeight + 6);
+  ctx.quadraticCurveTo(x + lean * 0.7, y - trunkHeight - 8, x + lean, y - trunkHeight - 15);
+  ctx.stroke();
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(x + lean * 0.3, y - trunkHeight + 15);
+  ctx.quadraticCurveTo(x + lean * 0.4 - 7, y - trunkHeight + 8, x + lean * 0.4 - 11, y - trunkHeight + 3);
+  ctx.stroke();
+
+  for (let layer = 0; layer < layers; layer += 1) {
+    const width = obstacle.w * (0.46 - layer * 0.055);
     const height = 28 + layer * 7;
-    const centerX = x + random.range(-5, 5);
+    const centerX = x + lean * (0.5 + layer * 0.22) + random.range(-4, 4);
     const centerY = y - 48 - layer * 17;
-    const base = ['#2b4b52', '#3f6b62', '#5a8a72'][layer]!;
+    const base = palette[layer % palette.length]!;
     const leaf = linear(ctx, centerX - width / 2, centerY - height, centerX + width / 2, centerY + height, '#7eb28a', base, '#2c4c56');
+    // Canopy shape varies per layer so the crown is lumpy, not a stacked cone.
+    const jitter = (slot: number) => random.range(-width * 0.07, width * 0.07);
     pathFill(ctx, [
       [centerX - width / 2, centerY + height * 0.2],
-      [centerX - width * 0.32, centerY - height * 0.3],
-      [centerX, centerY - height * 0.55],
-      [centerX + width * 0.34, centerY - height * 0.28],
-      [centerX + width / 2, centerY + height * 0.25],
-      [centerX, centerY + height * 0.5],
+      [centerX - width * 0.34, centerY - height * 0.28 + jitter(1)],
+      [centerX - width * 0.08, centerY - height * 0.55 + jitter(2)],
+      [centerX + width * 0.3, centerY - height * 0.3 + jitter(3)],
+      [centerX + width / 2, centerY + height * 0.24 + jitter(4)],
+      [centerX + width * 0.12, centerY + height * 0.46],
+      [centerX - width * 0.22, centerY + height * 0.4],
     ], leaf, '#0f1c2e', 3);
-    ctx.strokeStyle = withAlpha('#d8f0c0', 0.32);
-    ctx.lineWidth = 1.5;
+
+    // Moon-side highlight on the upper-left of each canopy lobe.
+    ctx.strokeStyle = withAlpha('#d8f0c0', 0.34);
+    ctx.lineWidth = 1.6;
     ctx.beginPath();
-    ctx.moveTo(centerX - width * 0.28, centerY - height * 0.15);
-    ctx.quadraticCurveTo(centerX - width * 0.1, centerY - height * 0.3, centerX + width * 0.06, centerY - height * 0.42);
+    ctx.moveTo(centerX - width * 0.32, centerY - height * 0.1);
+    ctx.quadraticCurveTo(centerX - width * 0.2, centerY - height * 0.34, centerX - width * 0.02, centerY - height * 0.44);
     ctx.stroke();
+    // A couple of leaf specks catch the light.
+    if (layer > 0) {
+      circle(ctx, centerX - width * 0.26, centerY - height * 0.16, 2.2, withAlpha('#c8e8a8', 0.42));
+      circle(ctx, centerX + width * 0.18, centerY - height * 0.22, 1.8, withAlpha('#c8e8a8', 0.32));
+    }
   }
 }
 
@@ -507,25 +568,65 @@ function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle, sa
     const body = level >= 2 ? '#c78269' : level === 1 ? '#8fa18d' : '#6e827a';
     roundRect(ctx, x + 5, y + 30, w - 10, h - 30, 7, linear(ctx, x, y + 30, x + w, y + h, body, '#3c5a5a'), '#0f1c2e', 3.5);
     drawSurfaceTexture(ctx, x + 5, y + 30, w - 10, h - 30, '#e2d2ab', Math.floor(x + y), 'paper');
+    // Moon-side lift on the wall, so the face is not one flat wash.
+    ctx.save();
+    roundRect(ctx, x + 5, y + 30, w - 10, h - 30, 7, linear(ctx, x, y + 30, x + 34, y + 66, withAlpha('#e4f0cf', 0.18), withAlpha('#e4f0cf', 0)), '#0f1c2e', 0);
+    ctx.restore();
     pathFill(ctx, [[x - 4, y + 38], [x + w / 2, y - 3], [x + w + 4, y + 38]], level ? linear(ctx, x, y, x + w, y + 38, '#e88b6d', '#a64952') : linear(ctx, x, y, x + w, y + 38, '#7e8982', '#404d56'), '#0f1c2e', 3);
+    // Roof overhang shadow seats the roof on the wall.
+    ctx.fillStyle = 'rgba(6, 16, 28, 0.3)';
+    ctx.fillRect(x + 2, y + 36, w - 4, 7);
     roundRect(ctx, x + w / 2 - 13, y + h - 35, 26, 35, 5, linear(ctx, x, y, x + 26, y + 35, '#6e5044', '#302b36'), '#0f1c2e', 2.5);
-    roundRect(ctx, x + 18, y + 48, 22, 20, 4, linear(ctx, x + 18, y + 48, x + 40, y + 68, '#fff0b8', '#e2a14c'), '#0f1c2e', 2.5);
-    ctx.strokeStyle = withAlpha('#fff0b8', 0.45);
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(x + 20, y + 58);
-    ctx.lineTo(x + 38, y + 58);
-    ctx.stroke();
+    if (level > 0) {
+      // A lit window is what makes a cottage read as somebody's home.
+      softLight(ctx, x + 29, y + 58, 32, 26, '#f4c95d', 0.26);
+      softLight(ctx, x + 29, y + 86, 26, 12, '#e8a24e', 0.14);
+      roundRect(ctx, x + 18, y + 48, 22, 20, 4, linear(ctx, x + 18, y + 48, x + 40, y + 68, '#fff0b8', '#e2a14c'), '#0f1c2e', 2.5);
+      ctx.strokeStyle = withAlpha('#fff0b8', 0.5);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + 20, y + 58);
+      ctx.lineTo(x + 38, y + 58);
+      ctx.stroke();
+      for (let puff = 0; puff < 3; puff += 1) {
+        const rise = (time * 12 + puff * 19) % 48;
+        circle(ctx, x + w - 26 + Math.sin(time * 0.6 + puff) * 6, y + 6 - rise * 0.5, 4 + rise * 0.1, withAlpha('#e6ece6', 0.2 * (1 - rise / 48)));
+      }
+      drawHangingLantern(ctx, x + w - 18, y + 48, 0.4, '#f2c86e', time, 1.7);
+    } else {
+      // Unlit: dark glass with a cool reflection, so it still has life.
+      roundRect(ctx, x + 18, y + 48, 22, 20, 4, linear(ctx, x + 18, y + 48, x + 40, y + 68, '#2b3a4c', '#1b2735'), '#0f1c2e', 2.5);
+      pathFill(ctx, [[x + 20, y + 66], [x + 32, y + 50], [x + 38, y + 50], [x + 26, y + 66]], withAlpha('#8fa8c4', 0.28));
+    }
   } else if (obstacle.kind === 'forge') {
     const level = save.world.buildings.forge ?? 0;
+    // Stone base with a warm bounce along the lit edge.
     roundRect(ctx, x + 8, y + 28, w - 16, h - 28, 7, linear(ctx, x, y + 28, x + w, y + h, level ? '#8b9c91' : '#4a5860', '#31454e'), '#0f1c2e', 3.5);
     drawSurfaceTexture(ctx, x + 8, y + 28, w - 16, h - 28, '#d8e1cd', Math.floor(x * 3 + y), 'stone');
+    ctx.save();
+    roundRect(ctx, x + 8, y + 28, w - 16, h - 28, 7, linear(ctx, x, y + 28, x + 30, y + 60, withAlpha('#e4f0cf', 0.16), withAlpha('#e4f0cf', 0)), '#0f1c2e', 0);
+    ctx.restore();
     pathFill(ctx, [[x, y + 34], [x + w / 2, y + 4], [x + w, y + 34]], linear(ctx, x, y + 4, x + w, y + 34, '#72858b', '#2c3a45'), '#0f1c2e', 3);
+    // Roof overhang shadow grounds the roof onto the wall.
+    ctx.fillStyle = 'rgba(6, 16, 28, 0.3)';
+    ctx.fillRect(x + 6, y + 32, w - 12, 7);
     roundRect(ctx, x + 27, y + 54, w - 54, 32, 5, level ? linear(ctx, x + 27, y + 54, x + w - 27, y + 86, '#ffe08a', '#e06e4e') : '#1b2734', '#0f1c2e', 3);
     if (level) {
-      softLight(ctx, x + w / 2, y + 69, 38, 28, '#f4c95d', 0.28);
+      // Forge mouth glows, throws light onto the ground, and vents smoke.
+      softLight(ctx, x + w / 2, y + 69, 44, 34, '#f4c95d', 0.3);
+      softLight(ctx, x + w / 2, y + 96, 54, 20, '#e8a24e', 0.16);
       star(ctx, x + w / 2, y + 69, 10, '#fff0b8', 4, 0.2);
       circle(ctx, x + 24, y + 34, 5, '#f4c95d');
+      for (let puff = 0; puff < 4; puff += 1) {
+        const rise = (time * 15 + puff * 16) % 52;
+        const drift = Math.sin(time * 0.7 + puff) * 7;
+        const alpha = 0.24 * (1 - rise / 52);
+        circle(ctx, x + w * 0.74 + drift, y + 12 - rise * 0.5, 5 + rise * 0.11, withAlpha('#dfe7e0', alpha));
+      }
+    } else {
+      // Cold forge still shows a faint ember bed so it does not read as a hole.
+      ctx.fillStyle = withAlpha('#3a4756', 0.6);
+      ctx.fillRect(x + 31, y + 60, w - 62, 6);
     }
   } else if (obstacle.kind === 'water') {
     const radius = Math.min(26, h / 2);
@@ -613,32 +714,49 @@ function drawWorldLabel(ctx: CanvasRenderingContext2D, x: number, y: number, tex
 
 function drawGrass(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: number): void {
   for (const patch of zone.grass) {
+    const cx = patch.x + patch.w * 0.5;
+    const cy = patch.y + patch.h * 0.5;
+    const seed = hashString(`${zone.id}:${patch.x}:${patch.y}`);
+    const random = new SeededRandom(seed);
+
     ctx.save();
-    const glow = ctx.createRadialGradient(patch.x + patch.w * 0.5, patch.y + patch.h * 0.45, 0, patch.x + patch.w * 0.5, patch.y + patch.h * 0.45, patch.w * 0.6);
-    glow.addColorStop(0, withAlpha(zone.accent, 0.16));
+    // Soft mound of taller grass instead of a hard rectangle, so an encounter
+    // patch reads as terrain rather than a selection box.
+    organicOutline(ctx, cx, cy, patch.w * 0.52, patch.h * 0.54, seed, 0.07, 40);
+    const bed = ctx.createRadialGradient(cx, cy + patch.h * 0.18, 2, cx, cy, patch.w * 0.56);
+    bed.addColorStop(0, withAlpha(zone.groundAlt, 0.6));
+    bed.addColorStop(0.6, withAlpha('#3d6350', 0.48));
+    bed.addColorStop(1, withAlpha('#2c4a42', 0));
+    ctx.fillStyle = bed;
+    ctx.fill();
+
+    // Warm light pooling in the middle hints that something lives here.
+    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, patch.w * 0.5);
+    glow.addColorStop(0, withAlpha(zone.accent, 0.15));
     glow.addColorStop(1, withAlpha(zone.accent, 0));
-    ctx.fillStyle = withAlpha(zone.groundAlt, 0.5);
-    ctx.fillRect(patch.x, patch.y, patch.w, patch.h);
     ctx.fillStyle = glow;
-    ctx.fillRect(patch.x - 12, patch.y - 12, patch.w + 24, patch.h + 24);
-    ctx.setLineDash([3, 8]);
-    ctx.strokeStyle = withAlpha(zone.accent, 0.3);
-    ctx.lineWidth = 2;
-    ctx.strokeRect(patch.x + 5, patch.y + 5, patch.w - 10, patch.h - 10);
-    ctx.setLineDash([]);
-    const random = new SeededRandom(hashString(`${zone.id}:${patch.x}:${patch.y}`));
-    for (let index = 0; index < 38; index += 1) {
-      const x = patch.x + random.range(8, patch.w - 8);
-      const y = patch.y + random.range(8, patch.h - 8);
+    ctx.fill();
+
+    ctx.clip();
+    for (let index = 0; index < 46; index += 1) {
+      const x = patch.x + random.range(2, patch.w - 2);
+      const y = patch.y + random.range(4, patch.h - 2);
+      // Blades near the centre stand taller, which fakes a little volume.
+      const centreBias = 1 - Math.min(1, Math.hypot(x - cx, y - cy) / (patch.w * 0.5));
+      const height = 9 + centreBias * 9;
       const sway = Math.sin(time * (1.2 + (index % 4) * 0.08) + x * 0.03) * (index % 5 === 0 ? 5 : 3);
-      ctx.strokeStyle = index % 3 === 0 ? withAlpha('#f6d98a', 0.75) : index % 4 === 0 ? withAlpha(zone.accent, 0.55) : '#426d5c';
+      ctx.strokeStyle = index % 3 === 0
+        ? withAlpha('#f6d98a', 0.72)
+        : index % 4 === 0
+          ? withAlpha(zone.accent, 0.5)
+          : index % 5 === 0 ? '#547a63' : '#3f6656';
       ctx.lineWidth = index % 6 === 0 ? 2.6 : 1.8;
       ctx.beginPath();
       ctx.moveTo(x, y);
-      ctx.quadraticCurveTo(x + sway, y - 9, x + sway * 1.5, y - 16);
+      ctx.quadraticCurveTo(x + sway, y - height * 0.55, x + sway * 1.5, y - height);
       ctx.stroke();
       if (index % 9 === 0) {
-        circle(ctx, x + sway * 1.3, y - 15, 2.4, index % 2 ? '#f4c95d' : '#ef9a86');
+        circle(ctx, x + sway * 1.3, y - height, 2.4, index % 2 ? '#f4c95d' : '#ef9a86');
       }
     }
     ctx.restore();
@@ -710,6 +828,140 @@ function drawScatterDecor(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, t
       circle(ctx, x - 0.8, y - 6.8, 1, withAlpha('#fff0b8', 0.8));
     }
   }
+}
+
+/**
+ * Builds a smooth, non-circular closed outline. Perfect ellipses make a floating
+ * island read as a flat disc; two low harmonics give it an organic silhouette
+ * while staying cheap enough to redraw every frame.
+ */
+/**
+ * Radial scale for the organic outline. The result is always >= 1, so the drawn
+ * plate is never smaller than the collision ellipse in `WorldRuntime.isWalkable`
+ * and the player can never walk off the visible edge. Symmetric wobble would let
+ * the silhouette pinch inward past the walkable radius at the island's poles.
+ */
+export function outlineScale(seed: number, wobble: number, t: number): number {
+  const random = new SeededRandom(seed);
+  const phaseA = random.range(0, Math.PI * 2);
+  const phaseB = random.range(0, Math.PI * 2);
+  return 1
+    + (0.5 + 0.5 * Math.sin(t * 3 + phaseA)) * wobble * 0.62
+    + (0.5 + 0.5 * Math.sin(t * 5 + phaseB)) * wobble * 0.38;
+}
+
+function organicOutline(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  seed: number,
+  wobble = 0.03,
+  points = 64,
+): void {
+  ctx.beginPath();
+  for (let index = 0; index <= points; index += 1) {
+    const t = (index / points) * Math.PI * 2;
+    const n = outlineScale(seed, wobble, t);
+    const px = cx + Math.cos(t) * rx * n;
+    const py = cy + Math.sin(t) * ry * n;
+    if (index === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+}
+
+/** Samples the same outline so lit/shadow strokes follow the real silhouette. */
+function outlinePoint(cx: number, cy: number, rx: number, ry: number, seed: number, wobble: number, t: number): [number, number] {
+  const n = outlineScale(seed, wobble, t);
+  return [cx + Math.cos(t) * rx * n, cy + Math.sin(t) * ry * n];
+}
+
+/**
+ * Floating island mass: drop shadow, exposed rock rim, top plate with internal
+ * value variation, then a moon-side rim light so the landform has an edge.
+ */
+function drawIslandTerrain(ctx: CanvasRenderingContext2D, zone: ZoneDefinition): void {
+  const cx = zone.width / 2;
+  const cy = zone.height / 2;
+  const rx = zone.width * 0.475;
+  const ry = zone.height * 0.475;
+  const seed = hashString(`island:${zone.id}`);
+  const wobble = 0.05;
+  const random = new SeededRandom(seed);
+
+  // Soft cast shadow on the void below.
+  ctx.save();
+  organicOutline(ctx, cx + 6, cy + 58, rx * 1.04, ry * 1.02, seed, wobble);
+  ctx.fillStyle = 'rgba(5, 13, 24, 0.5)';
+  ctx.fill();
+  ctx.restore();
+
+  // Exposed rock underside peeking out below the grass line.
+  ctx.save();
+  organicOutline(ctx, cx, cy + 30, rx * 0.99, ry * 0.985, seed, wobble);
+  ctx.fillStyle = linear(ctx, cx, cy - ry * 0.2, cx, cy + ry, '#2b4351', '#101f31');
+  ctx.fill();
+  // Vertical striations read as strata in the cliff.
+  for (let index = 0; index < 26; index += 1) {
+    const t = Math.PI + (index / 25) * Math.PI;
+    const [px, py] = outlinePoint(cx, cy + 30, rx * 0.99, ry * 0.985, seed, wobble, t);
+    const length = 14 + (index % 4) * 9;
+    ctx.strokeStyle = withAlpha(index % 2 ? '#486778' : '#0c1826', 0.34);
+    ctx.lineWidth = 2 + (index % 3);
+    ctx.beginPath();
+    ctx.moveTo(px * 0.995 + cx * 0.005, py * 0.99);
+    ctx.lineTo(px * 0.95 + cx * 0.05, py * 0.99 + length);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Top plate with internal value patches clipped to the silhouette.
+  ctx.save();
+  organicOutline(ctx, cx, cy, rx, ry, seed, wobble);
+  ctx.fillStyle = linear(ctx, cx - rx, cy - ry, cx + rx, cy + ry, zone.groundAlt, zone.ground);
+  ctx.fill();
+  ctx.clip();
+
+  // Broad tonal drifts keep the plate from reading as one flat wash.
+  for (let index = 0; index < 7; index += 1) {
+    const px = cx + random.range(-rx * 0.8, rx * 0.8);
+    const py = cy + random.range(-ry * 0.8, ry * 0.8);
+    const pr = random.range(rx * 0.24, rx * 0.5);
+    ellipse(ctx, px, py, pr, pr * 0.78, withAlpha(index % 2 ? zone.groundAlt : zone.ground, 0.24));
+  }
+
+  // Moonlight falls from the upper left, so lift that side and cool the rest.
+  const light = ctx.createLinearGradient(cx - rx, cy - ry, cx + rx * 0.6, cy + ry);
+  light.addColorStop(0, withAlpha(zone.haze, 0.2));
+  light.addColorStop(0.46, withAlpha(zone.haze, 0.05));
+  light.addColorStop(1, 'rgba(8, 20, 34, 0.24)');
+  ctx.fillStyle = light;
+  ctx.fillRect(cx - rx * 1.1, cy - ry * 1.1, rx * 2.2, ry * 2.2);
+  ctx.restore();
+
+  // Rim light along the moon-facing arc, then a dark contour everywhere else.
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (let index = 0; index <= 30; index += 1) {
+    const t = Math.PI * 0.86 + (index / 30) * Math.PI * 1.28;
+    const [ax, ay] = outlinePoint(cx, cy, rx, ry, seed, wobble, t);
+    const [bx, by] = outlinePoint(cx, cy, rx, ry, seed, wobble, t + 0.05);
+    const strength = 1 - Math.abs(t - Math.PI * 1.5) / (Math.PI * 0.72);
+    ctx.strokeStyle = withAlpha('#f6efcf', 0.1 + Math.max(0, strength) * 0.52);
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(9, 19, 32, 0.5)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  organicOutline(ctx, cx, cy, rx, ry, seed, wobble);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawIslandFringe(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: number): void {
@@ -916,16 +1168,7 @@ export function drawWorldScene(
   ctx.save();
   ctx.translate(-options.camera.x, -options.camera.y);
 
-  ellipse(ctx, zone.width / 2, zone.height / 2 + 40, zone.width * 0.5, zone.height * 0.5, 'rgba(7, 18, 32, 0.52)');
-  ellipse(ctx, zone.width / 2, zone.height / 2 + 24, zone.width * 0.49, zone.height * 0.49, 'rgba(38, 66, 71, 0.62)');
-  ellipse(ctx, zone.width / 2, zone.height / 2, zone.width * 0.475, zone.height * 0.475, linear(ctx, zone.width * 0.1, zone.height * 0.1, zone.width * 0.9, zone.height * 0.9, zone.groundAlt, zone.ground));
-  ellipse(ctx, zone.width / 2, zone.height / 2 - 10, zone.width * 0.44, zone.height * 0.435, withAlpha(zone.groundAlt, 0.55));
-  ellipse(ctx, zone.width / 2, zone.height / 2 - 2, zone.width * 0.39, zone.height * 0.385, withAlpha(zone.ground, 0.55));
-  ctx.strokeStyle = withAlpha('#e4f0cf', 0.24);
-  ctx.lineWidth = 5;
-  ctx.beginPath();
-  ctx.ellipse(zone.width / 2, zone.height / 2 - 4, zone.width * 0.43, zone.height * 0.425, 0, 0, Math.PI * 2);
-  ctx.stroke();
+  drawIslandTerrain(ctx, zone);
   drawGroundTexture(ctx, zone);
   drawGrass(ctx, zone, options.time);
   drawScatterDecor(ctx, zone, options.time);
@@ -1067,38 +1310,117 @@ function drawGuideBeacon(ctx: CanvasRenderingContext2D, guide: GuideVisual, time
 export function drawTitleScene(ctx: CanvasRenderingContext2D, time: number, reducedMotion: boolean): void {
   const zone = ZONES.harbor;
   drawSky(ctx, zone, time, reducedMotion);
+
+  // Distant sibling islands add parallax depth behind the stage.
+  const far = new SeededRandom(31337);
+  for (let index = 0; index < 4; index += 1) {
+    const x = 40 + index * 132 + (reducedMotion ? 0 : Math.sin(time * 0.05 + index) * 7);
+    const y = 214 + (index % 2) * 46;
+    const rx = far.range(26, 46);
+    ellipse(ctx, x, y + 12, rx, rx * 0.62, 'rgba(7, 18, 32, 0.42)');
+    ellipse(ctx, x, y, rx * 0.92, rx * 0.5, withAlpha('#4a6a72', 0.5));
+    ellipse(ctx, x, y - rx * 0.16, rx * 0.5, rx * 0.22, withAlpha(zone.groundAlt, 0.42));
+    if (index % 2 === 0) {
+      softLight(ctx, x, y - 6, 22, 14, '#f4c95d', 0.16);
+      drawHangingLantern(ctx, x, y - 22, 0.3, '#f2c86e', time, index);
+    }
+  }
+
   ctx.save();
   const camera = { x: 210, y: 80 };
   ctx.translate(-camera.x, -camera.y);
-  ellipse(ctx, 450, 610, 442, 442, 'rgba(6, 16, 29, 0.5)');
-  ellipse(ctx, 450, 585, 420, 420, 'rgba(38, 66, 71, 0.7)');
-  ellipse(ctx, 450, 555, 405, 405, linear(ctx, 160, 200, 700, 800, zone.groundAlt, zone.ground));
-  ellipse(ctx, 450, 540, 365, 365, withAlpha(zone.groundAlt, 0.52));
-  ctx.strokeStyle = withAlpha('#e4f0cf', 0.22);
-  ctx.lineWidth = 5;
-  ctx.beginPath();
-  ctx.ellipse(450, 540, 380, 372, 0, 0, Math.PI * 2);
-  ctx.stroke();
+  // The stage is a bespoke crop, so the shared terrain helper is pointed at the
+  // same centre/radii the old flat disc used.
+  drawTitleIsland(ctx, zone);
   drawGroundTexture(ctx, zone);
   for (const obstacle of zone.obstacles) drawObstacle(ctx, obstacle, { world: { buildings: { cottage: 1, forge: 1 } } } as SaveData, time);
   drawLuma(ctx, 310, 455, time);
   drawHero(ctx, { x: 430, y: 500, facing: -0.5, walkPhase: time * 0.6, flame: 72, weaponType: 'branch', scale: 1.2, moving: false });
+
+  // Paper lantern garland strung across the harbour.
+  ctx.strokeStyle = withAlpha('#6b6455', 0.75);
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(60, 196);
+  ctx.quadraticCurveTo(450, 268, 852, 172);
+  ctx.stroke();
   for (let index = 0; index < 7; index += 1) {
     const x = 90 + index * 115;
-    const y = 210 + Math.sin(time * 0.7 + index) * 9;
-    softLight(ctx, x, y + 18, 38, 30, '#f4c95d', 0.18);
-    ctx.strokeStyle = '#5f5b4c';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x, y + 55);
-    ctx.stroke();
-    roundRect(ctx, x - 16, y, 32, 42, 8, linear(ctx, x - 16, y, x + 16, y + 42, index % 2 ? '#ffe08a' : '#f0a486', index % 2 ? '#d19b45' : '#b85f5d'), '#0f1c2e', 3);
-    circle(ctx, x, y + 22, 7, withAlpha('#fff8d2', 0.92));
-    star(ctx, x, y + 22, 3, '#fff0b8', 4, time * 0.3 + index);
+    const t = (x - 60) / 792;
+    const y = 196 + Math.sin(t * Math.PI) * 50 - t * 24;
+    drawHangingLantern(ctx, x, y, 0.72, index % 2 ? '#f2c86e' : '#e88470', time, index);
   }
   ctx.restore();
   drawVignette(ctx, 0.42);
+}
+
+/** Title-screen island: same layered language as the playable zones. */
+function drawTitleIsland(ctx: CanvasRenderingContext2D, zone: ZoneDefinition): void {
+  const cx = 450;
+  const cy = 555;
+  const rx = 405;
+  const ry = 405;
+  const seed = hashString('island:title');
+  const wobble = 0.05;
+  const random = new SeededRandom(seed);
+
+  organicOutline(ctx, cx + 4, cy + 46, rx * 1.03, ry * 1.02, seed, wobble);
+  ctx.fillStyle = 'rgba(5, 13, 24, 0.5)';
+  ctx.fill();
+
+  organicOutline(ctx, cx, cy + 24, rx * 0.99, ry * 0.985, seed, wobble);
+  ctx.fillStyle = linear(ctx, cx, cy - ry * 0.2, cx, cy + ry, '#2b4351', '#101f31');
+  ctx.fill();
+  for (let index = 0; index < 24; index += 1) {
+    const t = Math.PI + (index / 23) * Math.PI;
+    const [px, py] = outlinePoint(cx, cy + 24, rx * 0.99, ry * 0.985, seed, wobble, t);
+    ctx.strokeStyle = withAlpha(index % 2 ? '#486778' : '#0c1826', 0.32);
+    ctx.lineWidth = 2 + (index % 3);
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px * 0.96 + cx * 0.04, py + 13 + (index % 4) * 8);
+    ctx.stroke();
+  }
+
+  ctx.save();
+  organicOutline(ctx, cx, cy, rx, ry, seed, wobble);
+  ctx.fillStyle = linear(ctx, cx - rx, cy - ry, cx + rx, cy + ry, zone.groundAlt, zone.ground);
+  ctx.fill();
+  ctx.clip();
+  for (let index = 0; index < 6; index += 1) {
+    const px = cx + random.range(-rx * 0.8, rx * 0.8);
+    const py = cy + random.range(-ry * 0.8, ry * 0.8);
+    const pr = random.range(rx * 0.26, rx * 0.5);
+    ellipse(ctx, px, py, pr, pr * 0.78, withAlpha(index % 2 ? zone.groundAlt : zone.ground, 0.24));
+  }
+  const light = ctx.createLinearGradient(cx - rx, cy - ry, cx + rx * 0.6, cy + ry);
+  light.addColorStop(0, withAlpha(zone.haze, 0.2));
+  light.addColorStop(0.46, withAlpha(zone.haze, 0.05));
+  light.addColorStop(1, 'rgba(8, 20, 34, 0.24)');
+  ctx.fillStyle = light;
+  ctx.fillRect(cx - rx * 1.1, cy - ry * 1.1, rx * 2.2, ry * 2.2);
+  ctx.restore();
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (let index = 0; index <= 30; index += 1) {
+    const t = Math.PI * 0.86 + (index / 30) * Math.PI * 1.28;
+    const [ax, ay] = outlinePoint(cx, cy, rx, ry, seed, wobble, t);
+    const [bx, by] = outlinePoint(cx, cy, rx, ry, seed, wobble, t + 0.05);
+    const strength = 1 - Math.abs(t - Math.PI * 1.5) / (Math.PI * 0.72);
+    ctx.strokeStyle = withAlpha('#f6efcf', 0.1 + Math.max(0, strength) * 0.5);
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(9, 19, 32, 0.46)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  organicOutline(ctx, cx, cy, rx, ry, seed, wobble);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawMonsterBody(ctx: CanvasRenderingContext2D, entity: BattleEntity, time: number): void {
@@ -1414,28 +1736,75 @@ export function drawBattleScene(
   ctx.save();
   ctx.translate(240, 430);
   softLight(ctx, 0, -8, 230, 210, options.flame > 50 ? '#f4c95d' : '#b8e6c0', options.intro > 0 ? 0.08 : 0.16);
-  ellipse(ctx, 0, 34, 226, 220, 'rgba(4, 12, 24, 0.6)');
-  ctx.beginPath();
-  const points = 18;
-  for (let index = 0; index < points; index += 1) {
-    const angle = index / points * Math.PI * 2;
-    const radiusX = 202 + Math.sin(index * 2.3) * 7;
-    const radiusY = 198 + Math.cos(index * 1.8) * 7;
-    const x = Math.cos(angle) * radiusX;
-    const y = Math.sin(angle) * radiusY;
-    if (index === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.fillStyle = options.intro > 0 ? '#222c40' : linear(ctx, -210, -210, 210, 210, '#71837b', '#364d56');
+  ellipse(ctx, 0, 46, 232, 216, 'rgba(3, 9, 19, 0.55)');
+
+  const platform = (offsetX: number, offsetY: number, scale: number) => {
+    ctx.beginPath();
+    const points = 20;
+    for (let index = 0; index < points; index += 1) {
+      const angle = index / points * Math.PI * 2;
+      const radiusX = (202 + Math.sin(index * 2.3) * 7) * scale;
+      const radiusY = (198 + Math.cos(index * 1.8) * 7) * scale;
+      const x = Math.cos(angle) * radiusX + offsetX;
+      const y = Math.sin(angle) * radiusY + offsetY;
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  };
+
+  // Platform body, then a lit top face so the disc reads as a raised stone.
+  platform(0, 18, 1);
+  ctx.fillStyle = linear(ctx, 0, -180, 0, 220, '#33485a', '#101d2c');
+  ctx.fill();
+  platform(0, 0, 1);
+  ctx.fillStyle = options.intro > 0 ? '#222c40' : linear(ctx, -210, -210, 210, 210, '#7d9089', '#31485a');
   ctx.fill();
   ctx.strokeStyle = '#0b1727';
   ctx.lineWidth = 9;
   ctx.stroke();
-  ctx.strokeStyle = withAlpha('#f4d79a', 0.7);
+  ctx.strokeStyle = withAlpha('#f4d79a', 0.62);
   ctx.lineWidth = 3;
   ctx.stroke();
-  ellipse(ctx, 0, 2, 178, 174, options.intro > 0 ? '#2a3448' : linear(ctx, -180, -180, 180, 180, '#7b9181', '#4a6363'));
+
+  // Arena floor: worn stone with a lantern circle burned into it.
+  ctx.save();
+  ellipse(ctx, 0, 2, 178, 174, options.intro > 0 ? '#2a3448' : linear(ctx, -180, -180, 180, 180, '#8aa08c', '#4a6363'));
+  ctx.clip();
+  const floorSeed = 4242;
+  const floorRandom = new SeededRandom(floorSeed);
+  for (let index = 0; index < 40; index += 1) {
+    const px = floorRandom.range(-180, 180);
+    const py = floorRandom.range(-176, 176);
+    ellipse(ctx, px, py, floorRandom.range(16, 46), floorRandom.range(10, 30), withAlpha(index % 2 ? '#9db098' : '#3f5a5e', 0.14));
+  }
+  for (let index = 0; index < 14; index += 1) {
+    const angle = floorRandom.range(0, Math.PI * 2);
+    const radius = floorRandom.range(50, 150);
+    ctx.strokeStyle = withAlpha('#2c4450', 0.28);
+    ctx.lineWidth = floorRandom.range(1, 2.4);
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(angle) * radius, Math.sin(angle) * radius * 0.94);
+    ctx.lineTo(Math.cos(angle) * radius + floorRandom.range(-30, 30), Math.sin(angle) * radius * 0.94 + floorRandom.range(-24, 24));
+    ctx.stroke();
+  }
+  // Concentric lantern rings anchor the eye at centre stage.
+  ctx.strokeStyle = withAlpha('#f4d79a', options.intro > 0 ? 0.1 : 0.26);
+  ctx.lineWidth = 2;
+  for (const ring of [70, 118, 158]) {
+    ctx.beginPath();
+    ctx.ellipse(0, 2, ring, ring * 0.96, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // Moon-side falloff across the floor.
+  const floorLight = ctx.createLinearGradient(-180, -180, 150, 180);
+  floorLight.addColorStop(0, withAlpha('#e4f0cf', 0.16));
+  floorLight.addColorStop(0.5, 'rgba(8, 20, 34, 0)');
+  floorLight.addColorStop(1, 'rgba(6, 16, 28, 0.32)');
+  ctx.fillStyle = floorLight;
+  ctx.fillRect(-190, -190, 380, 380);
+  ctx.restore();
+
   ctx.strokeStyle = withAlpha('#e4f0cf', 0.24);
   ctx.lineWidth = 2;
   ctx.beginPath();
