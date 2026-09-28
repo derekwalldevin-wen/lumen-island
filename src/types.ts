@@ -2,7 +2,7 @@ export type WeaponType = 'branch' | 'blade' | 'bell';
 export type Rarity = 'plain' | 'fine' | 'star' | 'legend';
 export type EnemyAi = 'melee' | 'shooter' | 'charger' | 'tank' | 'flanker' | 'summoner' | 'boss';
 export type SceneMode = 'title' | 'world' | 'battle';
-export type OverlayName = 'none' | 'title' | 'bag' | 'forge' | 'journal' | 'map' | 'build' | 'settings' | 'pause' | 'dialogue' | 'result' | 'intro';
+export type OverlayName = 'none' | 'title' | 'bag' | 'forge' | 'journal' | 'map' | 'build' | 'settings' | 'pause' | 'dialogue' | 'result' | 'intro' | 'guide';
 export type MaterialId = 'cloudFluff' | 'lampPaper' | 'rainPearl' | 'starSand' | 'inkWing' | 'oldGear' | 'moonThread';
 export type WeaponId =
   | 'sprigFork'
@@ -100,6 +100,8 @@ export interface WorldSave {
   buildings: Partial<Record<BuildingId, number>>;
   discoveredZones: ZoneId[];
   tutorialSeen: boolean;
+  guideSeen: boolean;
+  tutorialBattleSeen: boolean;
   endingSeen: boolean;
 }
 

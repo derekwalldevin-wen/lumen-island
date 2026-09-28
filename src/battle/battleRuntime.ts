@@ -37,6 +37,12 @@ export interface BattleHudState {
   enemyPhase: number;
   elapsed: number;
   enemiesLeft: number;
+  /** Seconds since the player landed their first hit, or -1 before that. */
+  timeToFirstHit: number;
+  /** Seconds since the player's first successful dodge, or -1 before that. */
+  timeToFirstDodge: number;
+  /** Seconds since the player first used the weapon skill, or -1 before that. */
+  timeToFirstSkill: number;
 }
 
 export interface BattleResult {
@@ -101,6 +107,9 @@ export class BattleRuntime {
   private comboStep = 0;
   private dodgeDirection: Vec2 = { x: 0, y: -1 };
   private pendingHits = 0;
+  private firstHitAt = -1;
+  private firstDodgeAt = -1;
+  private firstSkillAt = -1;
 
   constructor(hooks: BattleHooks, seed = Date.now()) {
     this.hooks = hooks;
@@ -271,6 +280,9 @@ export class BattleRuntime {
       enemyPhase: target?.phase ?? 1,
       elapsed: this.elapsed,
       enemiesLeft: this.enemies.filter((enemy) => !enemy.dead).length,
+      timeToFirstHit: this.firstHitAt,
+      timeToFirstDodge: this.firstDodgeAt,
+      timeToFirstSkill: this.firstSkillAt,
     };
   }
 
@@ -300,6 +312,7 @@ export class BattleRuntime {
     this.dodgeTimer = 0.28;
     this.dodgeCooldown = 0.82;
     this.heroInvulnerable = 0.34;
+    if (this.firstDodgeAt < 0) this.firstDodgeAt = this.elapsed;
     this.flame = Math.min(100, this.flame + 4 * this.stats.flameGain);
     this.addParticles(this.hero.x, this.hero.y - 20, '#9ce3d7', 10, 'star');
     this.hooks.onSound('dodge');
@@ -358,6 +371,7 @@ export class BattleRuntime {
   }
 
   private performSkill(): void {
+    if (this.firstSkillAt < 0) this.firstSkillAt = this.elapsed;
     const target = this.nearestEnemy(400);
     if (this.weapon.type === 'branch') {
       this.skillCooldown = 4.2;
@@ -607,6 +621,7 @@ export class BattleRuntime {
 
   private hitEnemy(enemy: BattleEntity, baseDamage: number, multiplier: number): void {
     if (enemy.dead) return;
+    if (this.firstHitAt < 0) this.firstHitAt = this.elapsed;
     const result = damageRoll(baseDamage * multiplier * flameMultiplier(this.flame), enemy.defense, this.stats.crit, this.stats.critDamage, this.random.next());
     enemy.hp = Math.max(0, enemy.hp - result.amount);
     enemy.hitFlash = 0.16;

@@ -83,6 +83,8 @@ export function normaliseSave(value: unknown, now = Date.now()): SaveData | null
     buildings,
     discoveredZones: [...new Set(discoveredZones)],
     tutorialSeen: rawWorld.tutorialSeen === true,
+    guideSeen: rawWorld.guideSeen === true,
+    tutorialBattleSeen: rawWorld.tutorialBattleSeen === true,
     endingSeen: rawWorld.endingSeen === true,
   };
 

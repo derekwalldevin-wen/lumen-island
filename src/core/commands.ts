@@ -1,6 +1,6 @@
 import type { BuildingId, ZoneId } from '../types';
 
-export type UiPanel = 'bag' | 'forge' | 'journal' | 'map' | 'build' | 'settings' | 'pause';
+export type UiPanel = 'bag' | 'forge' | 'journal' | 'map' | 'build' | 'settings' | 'pause' | 'guide';
 
 export type GameCommand =
   | { type: 'new-game' }
@@ -21,6 +21,7 @@ export type GameCommand =
   | { type: 'choose-route'; route: 'warden' | 'shadow' | 'weaver' }
   | { type: 'dialogue-continue' }
   | { type: 'result-continue' }
+  | { type: 'guide-intro-done' }
   | { type: 'setting-sfx'; value: number }
   | { type: 'setting-music'; value: number }
   | { type: 'setting-reduced-motion'; value: boolean }

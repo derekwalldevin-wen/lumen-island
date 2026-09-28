@@ -193,8 +193,11 @@ const ZONE_LIST: ZoneDefinition[] = [
     grass: [],
     interactables: [
       { id: 'keeper-luma', x: 450, y: 455, radius: 62, kind: 'npc', label: '灯塔守望者·露玛' },
-      { id: 'home-forge', x: 690, y: 235, radius: 70, kind: 'forge', label: '巡灯工坊' },
-      { id: 'home-build', x: 205, y: 245, radius: 70, kind: 'build', label: '岛屋建造板' },
+      // Trigger points sit on the walkable apron in front of each building. Placed
+      // on the buildings themselves they would be unreachable, because the whole
+      // trigger disc falls inside the structure's own collision box.
+      { id: 'home-forge', x: 690, y: 322, radius: 70, kind: 'forge', label: '巡灯工坊' },
+      { id: 'home-build', x: 205, y: 322, radius: 70, kind: 'build', label: '岛屋建造板' },
       { id: 'to-cloudstep', x: 450, y: 935, radius: 76, kind: 'portal', label: '前往云阶草坡', target: 'cloudstep' },
     ],
     ambience: 'home',

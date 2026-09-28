@@ -61,6 +61,8 @@ export function createInitialSave(now = Date.now()): SaveData {
       buildings: {},
       discoveredZones: ['harbor'],
       tutorialSeen: false,
+      guideSeen: false,
+      tutorialBattleSeen: false,
       endingSeen: false,
     },
     stats: {

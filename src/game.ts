@@ -6,6 +6,7 @@ import { GameCommand, UiPanel } from './core/commands';
 import { InputController } from './core/input';
 import { SaveManager } from './save/saveManager';
 import { UIController } from './ui/ui';
+import { guideStepCount, isAtGuideMarker, resolveGuide } from './guide/guide';
 import { drawBattleScene, drawTitleScene, drawWorldScene, BASE_HEIGHT, BASE_WIDTH } from './render/visuals';
 import {
   advanceQuest,
@@ -98,6 +99,8 @@ export class Game {
   private pageHidden = false;
   private raf = 0;
   private saveTicker = 0;
+  private guide: ReturnType<typeof resolveGuide> | null = null;
+  private guideIntroShown = false;
 
   constructor(root: HTMLElement) {
     this.ui = new UIController(root, (command) => this.handleCommand(command));
@@ -115,6 +118,7 @@ export class Game {
     this.bindEnvironment();
     this.resize();
     this.ui.setTouchVisible(this.save.settings.showTouch);
+    this.ui.setTutorialBattleSeen(this.save.world.tutorialBattleSeen);
     this.ui.renderTitle(this.saveManager.hasSave(), false);
   }
 
@@ -225,11 +229,22 @@ export class Game {
       drawTitleScene(this.ctx, this.time, this.save.settings.reducedMotion);
     } else if (this.mode === 'world') {
       this.updateCamera();
+      this.guide = resolveGuide(this.save, this.world.currentZone.id, this.world.x, this.world.y);
+      const marker = this.guide.marker;
       drawWorldScene(this.ctx, this.world, this.save, {
         time: this.time,
         camera: this.camera,
         nearbyId: this.world.getNearbyInteractable()?.id ?? null,
         reducedMotion: this.save.settings.reducedMotion,
+        guide: marker
+          ? {
+            x: marker.x,
+            y: marker.y,
+            label: marker.kind === 'gate' ? `前往 ${marker.label}` : marker.label,
+            kind: marker.kind,
+            inRange: isAtGuideMarker(this.guide, this.world.x, this.world.y),
+          }
+          : null,
       });
     } else if (this.battle) {
       const hud = this.battle.getHudState();
@@ -268,6 +283,7 @@ export class Game {
     void this.audio.unlock();
     if (this.overlay === 'dialogue' && command.type !== 'dialogue-continue') return;
     if (this.overlay === 'result' && command.type !== 'result-continue') return;
+    if (this.overlay === 'guide' && command.type !== 'guide-intro-done' && command.type !== 'close-panel') return;
     switch (command.type) {
       case 'new-game':
         this.newGame();
@@ -324,6 +340,9 @@ export class Game {
       case 'dialogue-continue':
         this.continueDialogue();
         break;
+      case 'guide-intro-done':
+        this.closeGuideIntro();
+        break;
       case 'result-continue':
         this.continueResult();
         break;
@@ -359,11 +378,142 @@ export class Game {
     this.save = createInitialSave();
     this.beginWorld(true);
     this.persist();
+    this.guide = null;
+    this.openGuideIntro();
+  }
+
+  /**
+   * First-run card. Explains the loop and the controls up front, then hands the
+   * player to Luma so the story trigger is never a guessing game.
+   */
+  private openGuideIntro(): void {
+    this.overlay = 'guide';
+    this.attackHeld = false;
+    this.input.setEnabled(false);
+    this.ui.setTouchVisible(false);
+    this.ui.setOverlay('guide', `
+      <section class="guide-intro" role="dialog" aria-modal="true" aria-label="新手指引">
+        <div class="panel__eyebrow">HOW TO PLAY · 新手指引</div>
+        <h2>三分钟上手《灯火小岛》</h2>
+        <p class="guide-intro__lead">你是新任云灯巡岛员。这座岛的灯熄了，暮影藏在草丛里。<br />跟着指引卡一步步做完 ${guideStepCount()} 步，长夜就会结束。</p>
+        <div class="guide-loop">
+          <div><b>1 · 探索</b><span>走到发光标记处按 <kbd>E</kbd> 互动。地图、传送门、工坊都在标记上。</span></div>
+          <div><b>2 · 战斗</b><span>草丛会自动开战。<kbd>J</kbd>/<kbd>空格</kbd> 攻击，<kbd>K</kbd> 闪避，<kbd>L</kbd> 技能，<kbd>H</kbd> 喝药。</span></div>
+          <div><b>3 · 成长</b><span>战利品换铜币与材料，在工坊锻造装备，在建造板点灯解锁新区域。</span></div>
+        </div>
+        <div class="guide-steps-preview">
+          <span class="guide-steps-preview__label">前 3 步</span>
+          <ol>
+            <li><b>找露玛</b>港中央的守望者，按 E 接委托</li>
+            <li><b>去云阶草坡</b>岛南端传送点，按 E 出发</li>
+            <li><b>打 3 个灯绒团</b>走进草丛，用 J 攻击</li>
+          </ol>
+        </div>
+        <div class="guide-intro__tips">
+          <span>手机</span>左下摇杆移动，右下按钮攻击/闪避/技能，靠近标记点「话」互动。
+          <span>电脑</span>WASD 移动，E 互动，B 背包，Esc 菜单。
+        </div>
+        <button class="paper-button paper-button--primary" data-command="guide-intro-done">我知道了，去点灯 <span>→</span></button>
+      </section>`);
+  }
+
+  private closeGuideIntro(): void {
+    this.save.world.guideSeen = true;
+    this.guideIntroShown = true;
+    this.persist();
+    this.overlay = 'none';
+    this.ui.clearOverlay();
+    this.input.setEnabled(true);
+    this.ui.setTouchVisible(this.save.settings.showTouch);
     this.showDialogue('露玛 · 灯塔守望者', '今晚的灯不会自己亮起来。拿上星枝短叉，去云阶草坡找回被风吹散的三盏引路灯吧。', () => {
       this.save.world.tutorialSeen = true;
       this.persist();
-      this.ui.toast('目标：前往云阶草坡', 'good');
+      this.guide = null;
+      this.ui.toast('目标更新：与云阶草坡的草丛交手', 'good');
     });
+  }
+
+  /** Title-screen variant: same rules, no current-step block (there is no save yet). */
+  private titleGuideHtml(): string {
+    return `<section class="guide-intro" role="dialog" aria-modal="true" aria-label="新手指引">
+      <div class="panel__eyebrow">HOW TO PLAY · 新手指引</div>
+      <h2>三分钟上手《灯火小岛》</h2>
+      <p class="guide-intro__lead">你是新任云灯巡岛员。这座岛的灯熄了，暮影藏在草丛里。<br />跟着指引卡一步步做完 ${guideStepCount()} 步，长夜就会结束。</p>
+      <div class="guide-loop">
+        <div><b>1 · 探索</b><span>走到发光标记处按 <kbd>E</kbd> 互动。地图、传送门、工坊都在标记上。</span></div>
+        <div><b>2 · 战斗</b><span>草丛会自动开战。<kbd>J</kbd>/<kbd>空格</kbd> 攻击，<kbd>K</kbd> 闪避，<kbd>L</kbd> 技能，<kbd>H</kbd> 喝药。</span></div>
+        <div><b>3 · 成长</b><span>战利品换铜币与材料，在工坊锻造装备，在建造板点灯解锁新区域。</span></div>
+      </div>
+      <div class="guide-steps-preview">
+        <span class="guide-steps-preview__label">完整流程</span>
+        <ol>
+          <li><b>1. 找露玛</b>港中央的守望者，按 E 接委托</li>
+          <li><b>2. 云阶草坡</b>岛南端传送点按 E 出发，走草丛打 3 个灯绒团</li>
+          <li><b>3. 修工坊</b>回港东北角按 E，用战利品修复巡灯工坊</li>
+          <li><b>4-9. 逐岛推进</b>纸灯林 → 雨芽花园 → 观星高台，途中修集雨棚与星图台解锁区域</li>
+        </ol>
+      </div>
+      <div class="guide-triggers">
+        <div><b>对话</b>走到 NPC 或传送点 → 出现光圈 → 按 <kbd>E</kbd></div>
+        <div><b>战斗</b>踩进草丛或触碰守关者 → 自动开战</div>
+        <div><b>建造</b>工坊/建造板 → 点「修复 / 升级」→ 消耗材料</div>
+        <div><b>解锁</b>修复关键建筑 → 对应岛屿才会开门</div>
+      </div>
+      <div class="guide-intro__tips">
+        <span>手机</span>左下摇杆移动，右下按钮攻击/闪避/技能，靠近标记点「话」互动。
+        <span>电脑</span>WASD 移动，E 互动，B 背包，Esc 菜单。
+      </div>
+      <button class="paper-button paper-button--primary" data-command="close-panel">看懂了 <span>→</span></button>
+    </section>`;
+  }
+
+  /** Full reference card, reachable any time from the HUD "导" button. */
+  private guidePanelHtml(): string {
+    const guide = this.guide ?? resolveGuide(this.save, this.world.currentZone.id, this.world.x, this.world.y);
+    const steps: Array<{ index: number; id: string; label: string }> = [
+      { index: 1, id: 'wake', label: '与露玛交谈，接下委托' },
+      { index: 2, id: 'learn', label: '去云阶草坡，击败 3 个灯绒团' },
+      { index: 3, id: 'forge', label: '回港修复巡灯工坊' },
+      { index: 4, id: 'woods', label: '纸灯林驱散 5 个纸鸢影' },
+      { index: 5, id: 'moth', label: '吞灯蛹巢挑战吞灯蛹' },
+      { index: 6, id: 'rain', label: '雨芽花园驱散 3 个星砂哨兵' },
+      { index: 7, id: 'bell', label: '雨幕钟塔挑战守铃者' },
+      { index: 8, id: 'stars', label: '观星高台清出 4 个暮影爪牙' },
+      { index: 9, id: 'final', label: '无星王座击败无星夜枭' },
+    ];
+    const rows = steps.map((item) => {
+      const state = item.index < guide.stepNumber ? 'done' : item.index === guide.stepNumber ? 'active' : 'todo';
+      const mark = state === 'done' ? '✦' : state === 'active' ? '◆' : '·';
+      return `<li class="guide-step-row is-${state}"><i>${mark}</i><b>${item.index}. ${item.label}</b></li>`;
+    }).join('');
+    return `<section class="panel" role="dialog" aria-modal="true" aria-label="新手指引">
+      <header class="panel__header">
+        <div><div class="panel__eyebrow">HOW TO PLAY</div><h2>新手指引</h2></div>
+        <button class="panel__close" data-command="close-panel" aria-label="关闭">×</button>
+      </header>
+      <div class="guide-current">
+        <span class="guide-current__step">第 ${guide.stepNumber} / ${guide.stepTotal} 步 · ${guide.step.zoneName}</span>
+        <b>${escapeHtml(guide.step.title)}</b>
+        <p>${escapeHtml(guide.step.hint)}</p>
+        <div class="guide-current__foot"><span>${escapeHtml(guide.step.progress)}</span><span>操作：${escapeHtml(guide.step.inputHint)}</span></div>
+      </div>
+      <div class="section-label">全部 ${guide.stepTotal} 步</div>
+      <ol class="guide-step-list">${rows}</ol>
+      <div class="section-label">怎么触发剧情</div>
+      <div class="guide-triggers">
+        <div><b>对话</b>走到 NPC 或传送点 → 出现光圈 → 按 <kbd>E</kbd></div>
+        <div><b>战斗</b>踩进草丛或触碰守关者 → 自动开战</div>
+        <div><b>建造</b>工坊/建造板 → 点「修复 / 升级」→ 消耗材料</div>
+        <div><b>解锁</b>修复关键建筑 → 对应岛屿才会开门</div>
+      </div>
+      <div class="controls-card">
+        <b>桌面操作</b>
+        <p>WASD / 方向键移动 · J 或空格攻击 · K 闪避 · L 技能 · H 药剂 · E 互动 · B 背包 · Esc 菜单</p>
+        <b>手机操作</b>
+        <p>左下摇杆移动，右下按钮攻击、闪避、技能、药剂；靠近发光标记后点「话」互动。</p>
+      </div>
+      <footer class="panel__footer"><span>进度自动保存在本地浏览器</span><button class="paper-button" data-command="close-panel">回到岛上</button></footer>
+    </section>`;
   }
 
   private continueGame(): void {
@@ -374,6 +524,12 @@ export class Game {
     }
     this.save = loaded;
     this.beginWorld(false);
+    this.guide = null;
+    this.ui.setTutorialBattleSeen(this.save.world.tutorialBattleSeen);
+    if (!this.save.world.guideSeen) {
+      this.openGuideIntro();
+      return;
+    }
     this.ui.toast(this.saveManager.lastLoadRecovered ? '已从备份恢复灯火记录' : '欢迎回到岛上', 'good');
   }
 
@@ -384,6 +540,7 @@ export class Game {
     this.ui.setMode('world');
     this.ui.clearOverlay();
     this.ui.setTouchVisible(this.save.settings.showTouch);
+    this.ui.setTutorialBattleSeen(this.save.world.tutorialBattleSeen);
     this.input.setEnabled(true);
     this.world = new WorldRuntime(this.save);
     this.audio.setScene(this.world.currentZone.safe ? 'safe' : 'world');
@@ -429,14 +586,20 @@ export class Game {
         <p>进度会在关键节点自动保存。</p>
         <div class="pause-actions">
           <button class="paper-button paper-button--primary" data-command="close-panel">继续巡灯</button>
-          <button class="paper-button" data-command="open-panel" data-panel="settings">声音与显示</button>
+          <button class="paper-button" data-command="open-panel" data-panel="guide">新手指引</button>
           <button class="paper-button" data-command="open-panel" data-panel="journal">旅途日志</button>
+          <button class="paper-button" data-command="open-panel" data-panel="settings">声音与显示</button>
         </div>
       </section>`);
   }
 
   private closePanel(): void {
     if (this.overlay === 'dialogue' || this.overlay === 'result') return;
+    if (this.mode === 'title') {
+      this.overlay = 'none';
+      this.ui.renderTitle(this.saveManager.hasSave(), false);
+      return;
+    }
     this.overlay = 'none';
     this.ui.clearOverlay();
     this.input.setEnabled(true);
@@ -444,7 +607,12 @@ export class Game {
   }
 
   private openPanel(panel: UiPanel): void {
-    if (this.mode === 'title') return;
+    if (this.mode === 'title' && panel !== 'guide') return;
+    if (panel === 'guide' && this.mode === 'title') {
+      this.overlay = 'guide';
+      this.ui.setOverlay('guide', this.titleGuideHtml());
+      return;
+    }
     this.attackHeld = false;
     this.pendingDodge = false;
     this.pendingSkill = false;
@@ -458,6 +626,8 @@ export class Game {
   private panelHtml(panel: UiPanel): string {
     const save = this.save;
     const stats = getPlayerStats(save);
+    if (panel === 'guide' || panel === 'journal' || panel === 'pause') this.guide = resolveGuide(save, this.world.currentZone.id, this.world.x, this.world.y);
+    if (panel === 'guide') return this.guidePanelHtml();
     if (panel === 'bag') {
       const ownedWeapons = WEAPONS.filter((weapon) => save.player.inventory.includes(weapon.id));
       const ownedCharms = CHARMS.filter((charm) => save.player.equippedCharm === charm.id || save.player.inventory.includes(charm.id));
@@ -515,7 +685,8 @@ export class Game {
     }
     if (panel === 'journal') {
       const quest = getQuestText(save);
-      return `<section class="panel" role="dialog" aria-modal="true"><header class="panel__header"><div><div class="panel__eyebrow">A THREAD OF LITTLE LIGHTS</div><h2>旅途日志</h2></div><button class="panel__close" data-command="close-panel" aria-label="关闭">×</button></header><div class="journal-quest"><span>当前线索</span><h3>${quest.title}</h3><p>${quest.hint}</p><b>${quest.progress}</b></div><div class="journal-stats"><div><b>${formatNumber(save.stats.battlesWon)}</b><span>胜利战斗</span></div><div><b>${formatNumber(save.stats.enemiesDefeated)}</b><span>驱散暮影</span></div><div><b>${formatNumber(save.stats.bestCombo)}</b><span>最高连击</span></div><div><b>${formatNumber(Math.floor(save.stats.playSeconds / 60))}</b><span>巡灯分钟</span></div></div><div class="controls-card"><b>桌面操作</b><p>WASD / 方向键移动 · J 或空格攻击 · K 闪避 · L 技能 · H 药剂 · E 互动 · B 背包</p><b>手机操作</b><p>左侧摇杆移动，右侧按钮攻击、闪避、技能与药剂；靠近发光标记后点击互动。</p></div><footer class="panel__footer"><span>灯火小岛 · 原创试玩版</span><button class="paper-button" data-command="close-panel">合上日志</button></footer></section>`;
+      const guide = this.guide ?? resolveGuide(save, this.world.currentZone.id, this.world.x, this.world.y);
+      return `<section class="panel" role="dialog" aria-modal="true"><header class="panel__header"><div><div class="panel__eyebrow">A THREAD OF LITTLE LIGHTS</div><h2>旅途日志</h2></div><button class="panel__close" data-command="close-panel" aria-label="关闭">×</button></header><div class="journal-quest"><span>当前线索</span><h3>${quest.title}</h3><p>${quest.hint}</p><b>${quest.progress}</b></div><div class="guide-current"><span class="guide-current__step">下一步 · 第 ${guide.stepNumber} / ${guide.stepTotal} 步 · ${guide.step.zoneName}</span><b>${escapeHtml(guide.step.title)}</b><p>${escapeHtml(guide.step.hint)}</p><div class="guide-current__foot"><span>${escapeHtml(guide.step.progress)}</span><span>操作：${escapeHtml(guide.step.inputHint)}</span></div></div><div class="section-label">怎么触发剧情</div><div class="guide-triggers"><div><b>对话</b>走到 NPC 或传送点 → 出现光圈 → 按 <kbd>E</kbd></div><div><b>战斗</b>踩进草丛或触碰守关者 → 自动开战</div><div><b>建造</b>工坊/建造板 → 点「修复 / 升级」→ 消耗材料</div><div><b>解锁</b>修复关键建筑 → 对应岛屿才会开门</div></div><div class="journal-stats"><div><b>${formatNumber(save.stats.battlesWon)}</b><span>胜利战斗</span></div><div><b>${formatNumber(save.stats.enemiesDefeated)}</b><span>驱散暮影</span></div><div><b>${formatNumber(save.stats.bestCombo)}</b><span>最高连击</span></div><div><b>${formatNumber(Math.floor(save.stats.playSeconds / 60))}</b><span>巡灯分钟</span></div></div><div class="controls-card"><b>桌面操作</b><p>WASD / 方向键移动 · J 或空格攻击 · K 闪避 · L 技能 · H 药剂 · E 互动 · B 背包 · Esc 菜单</p><b>手机操作</b><p>左下摇杆移动，右下按钮攻击、闪避、技能、药剂；靠近发光标记后点「话」互动。</p></div><footer class="panel__footer"><span>灯火小岛 · 原创试玩版</span><button class="paper-button" data-command="open-panel" data-panel="guide">完整新手指引</button><button class="paper-button" data-command="close-panel">合上日志</button></footer></section>`;
     }
     const settings = save.settings;
     return `<section class="panel" role="dialog" aria-modal="true"><header class="panel__header"><div><div class="panel__eyebrow">QUIET SETTINGS</div><h2>声音与显示</h2></div><button class="panel__close" data-command="close-panel" aria-label="关闭">×</button></header><label class="setting-row"><span><b>音效</b><small>攻击、灯光与界面反馈</small></span><input type="range" min="0" max="100" value="${Math.round(settings.sfx * 100)}" data-setting="sfx" /></label><label class="setting-row"><span><b>环境声</b><small>低频风声与灯塔和弦</small></span><input type="range" min="0" max="100" value="${Math.round(settings.music * 100)}" data-setting="music" /></label><label class="setting-row"><span><b>减少动态</b><small>关闭镜头摇晃与背景漂移</small></span><input type="checkbox" ${settings.reducedMotion ? 'checked' : ''} data-setting="reduced-motion" /></label><label class="setting-row"><span><b>显示触控区</b><small>在触屏设备上保留摇杆与按钮</small></span><input type="checkbox" ${settings.showTouch ? 'checked' : ''} data-setting="touch" /></label><div class="settings-note">所有设置会随旅途记录保存。游戏不需要联网，也没有账号。</div><footer class="panel__footer"><button class="danger-button" data-command="clear-save">清除旅途记录</button><button class="paper-button" data-command="close-panel">完成</button></footer></section>`;
@@ -632,6 +803,7 @@ export class Game {
     this.input.setEnabled(true);
     this.audio.setScene(enemyIds.length === 1 && ENEMIES[enemyIds[0]!]?.ai === 'boss' ? 'boss' : 'battle');
     this.ui.setBattleHud(this.battle.getHudState());
+    this.ui.setTutorialBattleSeen(this.save.world.tutorialBattleSeen);
     if (enemyIds.length === 1 && ENEMIES[enemyIds[0]!]?.ai === 'boss') this.ui.toast(`守关者 · ${ENEMIES[enemyIds[0]!]!.name}`, 'warning');
   }
 
@@ -691,6 +863,11 @@ export class Game {
     this.input.setEnabled(false);
     this.ui.setTouchVisible(false);
     this.overlay = 'result';
+    if (!this.save.world.tutorialBattleSeen) {
+      this.save.world.tutorialBattleSeen = true;
+      this.persist();
+      this.ui.setTutorialBattleSeen(true);
+    }
     this.pendingResultMode = result.victory ? 'victory' : 'defeat';
     this.pendingResultDialogue = this.resultDialogue(result.victory, summary.questNote);
     this.ui.setOverlay('result', this.resultHtml(result, summary));
@@ -775,6 +952,24 @@ export class Game {
       starlight: this.save.player.starlight,
       potionCount: this.save.player.potions,
       nearbyLabel: nearby ? nearby.label : null,
+    });
+
+    // Resolve fresh here: the HUD runs outside render(), and stale coordinates
+    // would make the distance readout and in-range highlight lie.
+    const guide = this.guide = resolveGuide(this.save, this.world.currentZone.id, this.world.x, this.world.y);
+    this.ui.setGuideHud({
+      stepNumber: guide.stepNumber,
+      stepTotal: guide.stepTotal,
+      title: guide.step.title,
+      hint: guide.step.hint,
+      progress: guide.step.progress,
+      inputHint: guide.step.inputHint,
+      distance: guide.distance,
+      needsTravel: guide.needsTravel,
+      markerLabel: guide.marker ? guide.marker.label : null,
+      inRange: isAtGuideMarker(guide, this.world.x, this.world.y),
+      detour: guide.step.detour,
+      visible: !this.save.world.guideSeen || this.save.world.questStage < 3,
     });
   }
 

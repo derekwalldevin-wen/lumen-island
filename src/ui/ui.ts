@@ -18,6 +18,21 @@ export interface WorldHudState {
   nearbyLabel: string | null;
 }
 
+export interface GuideHudState {
+  stepNumber: number;
+  stepTotal: number;
+  title: string;
+  hint: string;
+  progress: string;
+  inputHint: string;
+  distance: number | null;
+  needsTravel: boolean;
+  markerLabel: string | null;
+  inRange: boolean;
+  detour: boolean;
+  visible: boolean;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -71,6 +86,9 @@ export class UIController {
             <span class="button-glyph">✦</span><span>开始巡灯</span><small>NEW JOURNEY</small>
           </button>
           ${hasSave ? '<button class="paper-button" data-command="continue-game"><span class="button-glyph">↟</span><span>继续旅途</span><small>CONTINUE</small></button>' : ''}
+          <button class="paper-button paper-button--quiet" data-command="open-panel" data-panel="guide">
+            <span class="button-glyph">?</span><span>怎么玩</span><small>HOW TO PLAY</small>
+          </button>
         </div>
         <div class="title-footer"><span>原创 Q 版探索 RPG</span><i></i><span>键盘 + 触控</span><i></i><span>约 15–30 分钟</span></div>
         ${recovered ? '<p class="save-recovered">已从备份恢复上次的灯火记录</p>' : ''}
@@ -100,6 +118,28 @@ export class UIController {
     if (xpFill) xpFill.style.width = `${Math.min(100, Math.max(0, state.xp / state.xpNext * 100))}%`;
     this.setText('#world-prompt', state.nearbyLabel ? `${state.nearbyLabel}  ·  E 互动` : '');
     this.frame.classList.toggle('has-nearby', Boolean(state.nearbyLabel));
+    // Touch players have no E key, so the interact button lights up when in range.
+    const interact = this.root.querySelector<HTMLElement>('#touch-interact');
+    if (interact) {
+      interact.dataset.ready = String(Boolean(state.nearbyLabel));
+      interact.setAttribute('aria-label', state.nearbyLabel ? `与${state.nearbyLabel}互动` : '互动');
+    }
+  }
+
+  setGuideHud(state: GuideHudState): void {
+    const card = this.root.querySelector<HTMLElement>('#guide-card');
+    if (!card) return;
+    card.dataset.visible = String(state.visible);
+    card.dataset.inRange = String(state.inRange);
+    card.dataset.needsTravel = String(state.needsTravel);
+    this.setText('#guide-step', `第 ${state.stepNumber} / ${state.stepTotal} 步`);
+    this.setText('#guide-title', state.title);
+    this.setText('#guide-hint', state.hint);
+    this.setText('#guide-progress', state.progress);
+    this.setText('#guide-input', state.inputHint);
+    this.setText('#guide-distance', state.distance === null ? '' : `${state.distance} 步`);
+    const marker = this.root.querySelector<HTMLElement>('#guide-marker');
+    if (marker) marker.textContent = state.markerLabel ?? '';
   }
 
   setBattleHud(state: BattleHudState): void {
@@ -120,6 +160,37 @@ export class UIController {
     if (enemyFill) enemyFill.style.width = `${Math.min(100, Math.max(0, state.enemyHp / state.enemyMaxHp * 100))}%`;
     if (flameFill) flameFill.style.width = `${Math.min(100, Math.max(0, state.flame))}%`;
     this.root.dataset.flameStage = String(state.flameStage);
+    this.setBattleCoach(state);
+  }
+
+  /**
+   * First-battle coaching. Each tip only appears until the player performs the
+   * action, so the hints fade out on their own once understood.
+   */
+  private setBattleCoach(state: BattleHudState): void {
+    const element = this.root.querySelector<HTMLElement>('#battle-coach');
+    if (!element) return;
+    if (this.root.dataset.tutorialBattleSeen === 'true') {
+      element.dataset.visible = 'false';
+      return;
+    }
+    const tips: string[] = [];
+    if (state.elapsed < 1.2) {
+      tips.push('<b>用 J 或 空格攻击</b>（手机按住「击」）— 靠近灯绒团再挥动星枝短叉');
+    }
+    if (state.timeToFirstHit < 0) {
+      tips.push('<b>先打一下</b>— 按住攻击键不放，冷却结束会自动继续');
+    } else if (state.timeToFirstDodge < 0 && state.elapsed > 4) {
+      tips.push('<b>看到红光就按 K 闪避</b>— 敌人抬手蓄力时闪开可以触发「精准闪避」');
+    } else if (state.timeToFirstSkill < 0 && state.timeToFirstHit >= 0) {
+      tips.push('<b>按 L 放技能</b>— 星枝短叉的「藤星爆」能范围伤害并点亮灯火');
+    }
+    if (tips.length === 0) {
+      element.dataset.visible = 'false';
+      return;
+    }
+    element.dataset.visible = 'true';
+    element.innerHTML = tips.map((tip) => `<p>${tip}</p>`).join('');
   }
 
   setOverlay(name: OverlayName, html = ''): void {
@@ -144,6 +215,14 @@ export class UIController {
 
   setTouchVisible(visible: boolean): void {
     this.frame.classList.toggle('touch-hidden', !visible);
+  }
+
+  setTutorialBattleSeen(seen: boolean): void {
+    this.root.dataset.tutorialBattleSeen = String(seen);
+    if (seen) {
+      const coach = this.root.querySelector<HTMLElement>('#battle-coach');
+      if (coach) coach.dataset.visible = 'false';
+    }
   }
 
   toast(message: string, tone: 'normal' | 'good' | 'warning' = 'normal'): void {
@@ -219,6 +298,7 @@ export class UIController {
       case 'choose-route': return { type: 'choose-route', route: element.dataset.route as 'warden' | 'shadow' | 'weaver' };
       case 'dialogue-continue': return { type: 'dialogue-continue' };
       case 'result-continue': return { type: 'result-continue' };
+      case 'guide-intro-done': return { type: 'guide-intro-done' };
       case 'clear-save': return { type: 'clear-save' };
       default: return { type: 'close-panel' };
     }
@@ -259,9 +339,23 @@ export class UIController {
             <button data-command="open-panel" data-panel="forge" aria-label="锻造">锻</button>
             <button data-command="open-panel" data-panel="build" aria-label="建造">建</button>
             <button data-command="open-panel" data-panel="journal" aria-label="日志">志</button>
+            <button data-command="open-panel" data-panel="guide" aria-label="新手指引">导</button>
             <button data-command="open-panel" data-panel="settings" aria-label="设置">设</button>
           </nav>
           <div id="world-prompt" class="world-prompt"></div>
+          <section id="guide-card" class="guide-card" data-visible="false" data-in-range="false" data-needs-travel="false" aria-live="polite" aria-label="当前目标指引">
+            <header class="guide-card__head">
+              <span class="guide-card__step" id="guide-step">第 1 / 9 步</span>
+              <span class="guide-card__distance" id="guide-distance"></span>
+            </header>
+            <b class="guide-card__title" id="guide-title">点亮第一盏灯</b>
+            <p class="guide-card__hint" id="guide-hint"></p>
+            <div class="guide-card__foot">
+              <span class="guide-card__marker" id="guide-marker"></span>
+              <span class="guide-card__progress" id="guide-progress"></span>
+              <span class="guide-card__input" id="guide-input">E</span>
+            </div>
+          </section>
         </header>
 
         <section id="battle-hud" class="hud hud--battle" aria-label="战斗状态">
@@ -276,6 +370,7 @@ export class UIController {
           </div>
           <div id="battle-combo" class="battle-combo"></div>
           <div class="battle-skill-status"><span>技能 <b id="battle-skill-status">READY</b></span><span>闪避 <b id="battle-dodge-status">READY</b></span></div>
+          <div id="battle-coach" class="battle-coach" aria-live="polite"></div>
         </section>
 
         <div id="world-hint" class="desktop-hint"><kbd>WASD</kbd> 移动 <i></i><kbd>E</kbd> 互动 <i></i><kbd>B</kbd> 背包 <i></i><kbd>Esc</kbd> 菜单</div>
@@ -283,6 +378,7 @@ export class UIController {
         <div id="touch-controls" class="touch-controls" aria-label="触控操作">
           <div id="joystick" class="joystick" aria-label="移动摇杆"><div class="joystick__ring"></div><div class="joystick__knob"></div></div>
           <div class="touch-actions">
+            <button id="touch-interact" class="touch-button touch-button--interact" data-command="interact" aria-label="互动">话</button>
             <button class="touch-button touch-button--small" data-command="potion" aria-label="使用药剂">药</button>
             <button class="touch-button touch-button--small" data-command="dodge" aria-label="闪避">闪</button>
             <button class="touch-button touch-button--skill" data-command="skill" aria-label="武器技能">技</button>
