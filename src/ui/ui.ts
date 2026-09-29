@@ -1,5 +1,6 @@
 import type { BattleHudState } from '../battle/battleRuntime';
 import type { GameCommand, UiPanel } from '../core/commands';
+import { BATTLE_KEY_HINTS, buildBattleCoachTips, renderKeyHints, WORLD_KEY_HINTS } from './hints';
 import type { BuildingId, OverlayName, SceneMode, ZoneId } from '../types';
 
 export interface WorldHudState {
@@ -167,10 +168,6 @@ export class UIController {
     this.setBattleCoach(state);
   }
 
-  /**
-   * First-battle coaching. Each tip only appears until the player performs the
-   * action, so the hints fade out on their own once understood.
-   */
   private setBattleCoach(state: BattleHudState): void {
     const element = this.root.querySelector<HTMLElement>('#battle-coach');
     if (!element) return;
@@ -178,17 +175,7 @@ export class UIController {
       element.dataset.visible = 'false';
       return;
     }
-    const tips: string[] = [];
-    if (state.elapsed < 1.2) {
-      tips.push('<b>用 J 或 空格攻击</b>（手机按住「击」）— 靠近灯绒团再挥动星枝短叉');
-    }
-    if (state.timeToFirstHit < 0) {
-      tips.push('<b>先打一下</b>— 按住攻击键不放，冷却结束会自动继续');
-    } else if (state.timeToFirstDodge < 0 && state.elapsed > 4) {
-      tips.push('<b>看到红光就按 K 闪避</b>— 敌人抬手蓄力时闪开可以触发「精准闪避」');
-    } else if (state.timeToFirstSkill < 0 && state.timeToFirstHit >= 0) {
-      tips.push('<b>按 L 放技能</b>— 星枝短叉的「藤星爆」能范围伤害并点亮灯火');
-    }
+    const tips = buildBattleCoachTips(state);
     if (tips.length === 0) {
       element.dataset.visible = 'false';
       return;
@@ -399,7 +386,12 @@ export class UIController {
           <span class="minimap-frame__label" id="minimap-label">灯火港</span>
         </div>
 
-        <div id="world-hint" class="desktop-hint"><kbd>WASD</kbd> 移动 <i></i><kbd>E</kbd> 互动 <i></i><kbd>B</kbd> 背包 <i></i><kbd>Esc</kbd> 菜单</div>
+        <!-- Contextual key bar: the combat keys only matter in battle, so the bar
+             swaps sets with the scene instead of hiding them behind a panel. -->
+        <div id="world-hint" class="desktop-hint" aria-hidden="true">
+          <span class="desktop-hint__set" data-set="world">${renderKeyHints(WORLD_KEY_HINTS)}</span>
+          <span class="desktop-hint__set" data-set="battle">${renderKeyHints(BATTLE_KEY_HINTS)}</span>
+        </div>
 
         <div id="touch-controls" class="touch-controls" aria-label="触控操作">
           <div id="joystick" class="joystick" aria-label="移动摇杆"><div class="joystick__ring"></div><div class="joystick__knob"></div></div>

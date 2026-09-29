@@ -518,6 +518,26 @@ export class Game {
       </div>
       <div class="section-label">全部 ${guide.stepTotal} 步</div>
       <ol class="guide-step-list">${rows}</ol>
+      <div class="section-label">战斗怎么打</div>
+      <div class="combat-101">
+        <div class="combat-101__step">
+          <i>1</i>
+          <div><b>踩进草丛就会开战</b><span>发光的草丛里会冒出暮影，靠近守关者也一样。不用按任何键，战斗自动开始。</span></div>
+        </div>
+        <div class="combat-101__step">
+          <i>2</i>
+          <div><b>攻击＝按住 <kbd>J</kbd> 或 <kbd>空格</kbd> 挥武器</b><span>这就是攻击。按住不放，冷却结束会自动挥下一刀。手机按住右下角「击」。</span></div>
+        </div>
+        <div class="combat-101__step">
+          <i>3</i>
+          <div><b>打空敌人血条就赢</b><span>敌人头顶的紫色血条掉光即获胜。掉落铜币、星屑和材料，用来锻造和建造。</span></div>
+        </div>
+      </div>
+      <div class="guide-triggers">
+        <div><b>闪避</b>敌人抬手时地面出现红圈，此时按 <kbd>K</kbd> 闪开可以免疫伤害并触发精准闪避</div>
+        <div><b>技能</b>按 <kbd>L</kbd> 释放武器技能，范围伤害；命中越多灯火越亮，伤害越高</div>
+        <div><b>药剂</b>按 <kbd>H</kbd> 回血，药剂有限，去工坊补</div>
+      </div>
       <div class="section-label">怎么触发剧情</div>
       <div class="guide-triggers">
         <div><b>对话</b>走到 NPC 或传送点 → 出现光圈 → 按 <kbd>E</kbd></div>
