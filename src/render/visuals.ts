@@ -553,16 +553,133 @@ function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle, sa
     ctx.lineTo(x + w * 0.4, y + 9);
     ctx.stroke();
   } else if (obstacle.kind === 'ruin') {
-    roundRect(ctx, x + 8, y + 18, w - 16, h - 18, 4, linear(ctx, x, y, x + w, y + h, '#5f6e6b', '#b3ae95'), '#0f1c2e', 3);
-    roundRect(ctx, x, y, 22, 30, 4, linear(ctx, x, y, x + 24, y + 30, '#8e9482', '#d3c9a5'), '#0f1c2e', 3);
-    roundRect(ctx, x + w - 28, y + 8, 28, 22, 4, linear(ctx, x + w - 28, y + 8, x + w, y + 30, '#8e9482', '#d3c9a5'), '#0f1c2e', 3);
-    ctx.strokeStyle = '#4c5a5b';
+    // A roofless lantern shrine: broken wall with a jagged top, two piers, a
+    // dark interior, and a lantern still burning inside. The previous version
+    // was three overlapping rounded boxes, which read as stacked UI panels.
+    const ruinSeed = hashString(`ruin:${Math.round(x)}:${Math.round(y)}`);
+    const ruinRandom = new SeededRandom(ruinSeed);
+    const stoneLit = '#d3c9a7';
+    const stoneMid = '#9ba18c';
+    const stoneDark = '#5a6660';
+    const ruinH = h;
+    const pierW = Math.max(14, w * 0.17);
+
+    drawShadow(ctx, x + w / 2, y + ruinH, w * 0.58, 0.3);
+    // Rubble skirt, so the ruin meets the ground instead of hovering on it.
+    for (let index = 0; index < 8; index += 1) {
+      const rx2 = x + 4 + ruinRandom.range(0, w - 8);
+      const ry2 = y + ruinH - ruinRandom.range(0, 6);
+      ellipse(ctx, rx2, ry2, ruinRandom.range(4, 9), ruinRandom.range(3, 5.5), withAlpha(index % 2 ? stoneMid : stoneDark, 0.6));
+    }
+
+    // Back wall with a broken skyline. Kept lighter than the interior so the
+    // opening reads as a hole rather than the wall reading as a solid block.
+    const backTop = y + ruinH * 0.34;
+    const broken = [
+      [x + pierW * 0.5, backTop + ruinH * 0.1],
+      [x + pierW + w * 0.1, backTop - ruinH * 0.04],
+      [x + w * 0.34, backTop + ruinH * 0.05],
+      [x + w * 0.5, backTop - ruinH * 0.08],
+      [x + w * 0.66, backTop + ruinH * 0.06],
+      [x + w - pierW - w * 0.1, backTop - ruinH * 0.02],
+      [x + w - pierW * 0.5, backTop + ruinH * 0.12],
+    ];
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x + pierW * 0.5, y + ruinH);
+    for (const [bx, by] of broken) ctx.lineTo(bx, by);
+    ctx.lineTo(x + w - pierW * 0.5, y + ruinH);
+    ctx.closePath();
+    ctx.fillStyle = linear(ctx, x, backTop, x + w * 0.55, y + ruinH, stoneMid, stoneDark);
+    ctx.fill();
+    ctx.clip();
+    // Course lines turn the flat fill into masonry.
+    ctx.strokeStyle = withAlpha('#3a4746', 0.28);
+    ctx.lineWidth = 1.3;
+    const courseH = (y + ruinH - backTop) / 4;
+    for (let row = 1; row < 4; row += 1) {
+      const rowY = backTop + row * courseH;
+      ctx.beginPath();
+      ctx.moveTo(x + 2, rowY);
+      ctx.lineTo(x + w - 2, rowY);
+      ctx.stroke();
+      for (let joint = 0; joint < 4; joint += 1) {
+        const jx = x + pierW + joint * ((w - pierW * 2) / 4) + (row % 2 ? 8 : 0);
+        ctx.beginPath();
+        ctx.moveTo(jx, rowY);
+        ctx.lineTo(jx, rowY + courseH);
+        ctx.stroke();
+      }
+    }
+    const wallLight = ctx.createLinearGradient(x, y, x + w, y + ruinH);
+    wallLight.addColorStop(0, withAlpha('#f4f0d0', 0.24));
+    wallLight.addColorStop(0.55, 'rgba(255,255,255,0)');
+    wallLight.addColorStop(1, withAlpha('#0f1c2e', 0.26));
+    ctx.fillStyle = wallLight;
+    ctx.fillRect(x, y, w, ruinH);
+    ctx.restore();
+
+    // Interior shadow behind the opening, kept inside the wall silhouette.
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(x + pierW * 0.5, y + ruinH);
+    for (const [bx, by] of broken) ctx.lineTo(bx, by);
+    ctx.lineTo(x + w - pierW * 0.5, y + ruinH);
+    ctx.closePath();
+    ctx.clip();
+    const inner = ctx.createLinearGradient(0, backTop, 0, y + ruinH);
+    inner.addColorStop(0, 'rgba(9, 18, 31, 0.82)');
+    inner.addColorStop(1, 'rgba(20, 40, 48, 0.6)');
+    ctx.fillStyle = inner;
+    ctx.fillRect(x, backTop - ruinH * 0.2, w, ruinH);
+    // A lit altar slab at the back, which gives the interior a floor plane.
+    ctx.fillStyle = withAlpha('#7d8a7a', 0.5);
+    ctx.fillRect(x + pierW, y + ruinH * 0.72, w - pierW * 2, ruinH * 0.28);
+    ctx.restore();
+
+    // Two piers, one snapped shorter than the other.
+    for (const side of [0, 1]) {
+      const pierX = side === 0 ? x : x + w - pierW;
+      const pierTop = y + (side === 0 ? ruinH * 0.1 : ruinH * 0.28);
+      pathFill(ctx, [
+        [pierX, y + ruinH],
+        [pierX, pierTop + ruinH * 0.08],
+        [pierX + pierW * 0.4, pierTop],
+        [pierX + pierW, pierTop + ruinH * 0.05],
+        [pierX + pierW, y + ruinH],
+      ], linear(ctx, pierX, pierTop, pierX + pierW, y + ruinH, stoneLit, stoneDark), '#0f1c2e', 2.6);
+    }
+
+    // A lantern still burning inside: the warm focal point of the ruin. It hangs
+    // from a peg below the broken wall line so the body sits against the dark
+    // interior, where the warm colour actually reads.
+    const lanternX = x + w / 2;
+    const pegY = backTop + ruinH * 0.12;
+    const lanternY = pegY + 26;
+    ctx.strokeStyle = withAlpha('#3c4a48', 0.9);
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(x + 35, y + 26);
-    ctx.lineTo(x + 45, y + 53);
-    ctx.lineTo(x + 31, y + 78);
+    ctx.moveTo(lanternX - 7, pegY);
+    ctx.lineTo(lanternX + 7, pegY);
     ctx.stroke();
+    // Bounce light on the interior walls and the altar, drawn before the lantern
+    // so the flame itself stays the brightest thing in the ruin.
+    softLight(ctx, lanternX, lanternY + 8, w * 0.8, ruinH * 0.55, '#f4c95d', 0.26);
+    ctx.fillStyle = withAlpha('#f4c95d', 0.1);
+    ctx.fillRect(x + pierW, backTop, w - pierW * 2, ruinH);
+    drawHangingLantern(ctx, lanternX, pegY, 0.62, '#f4c95d', time, ruinSeed % 100);
+
+    // Moss on the base course, tying the stone to the grass.
+    for (let index = 0; index < 4; index += 1) {
+      ellipse(
+        ctx,
+        x + ruinRandom.range(pierW * 0.4, w - pierW * 0.4),
+        y + ruinH - ruinRandom.range(1, ruinH * 0.12),
+        ruinRandom.range(5, 10),
+        ruinRandom.range(2.5, 5),
+        withAlpha('#5f8c60', 0.34),
+      );
+    }
   } else if (obstacle.kind === 'house') {
     const level = save.world.buildings.cottage ?? 0;
     const body = level >= 2 ? '#c78269' : level === 1 ? '#8fa18d' : '#6e827a';
@@ -629,38 +746,148 @@ function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle, sa
       ctx.fillRect(x + 31, y + 60, w - 62, 6);
     }
   } else if (obstacle.kind === 'water') {
-    const radius = Math.min(26, h / 2);
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(x + radius, y);
-    ctx.arcTo(x + w, y, x + w, y + h, radius);
-    ctx.arcTo(x + w, y + h, x, y + h, radius);
-    ctx.arcTo(x, y + h, x, y, radius);
-    ctx.arcTo(x, y, x + w, y, radius);
-    ctx.closePath();
-    ctx.clip();
-    ctx.fillStyle = linear(ctx, x, y, x + w, y + h, '#204f63', '#74bcb0');
-    ctx.fillRect(x, y, w, h);
-    for (let index = 0; index < 5; index += 1) {
-      const waveY = y + 15 + index * 19 + Math.sin(time * 1.5 + index) * 2;
-      ctx.strokeStyle = withAlpha('#e2fbeb', 0.58 - index * 0.06);
-      ctx.lineWidth = index === 0 ? 3 : 1.5;
+    // An organic pond rather than a rounded box: the old rect with a 3.5px
+    // stroke was the one element that read as a debug primitive.
+    // A seeded phase makes the shoreline irregular but stable frame to frame;
+    // the two harmonics keep it from wobbling in sync with the ellipse.
+    const phase = (hashString(`pond:${Math.round(x)}:${Math.round(y)}`) % 628) / 100;
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+    const pond = (grow: number) => {
       ctx.beginPath();
-      ctx.moveTo(x + 8, waveY);
-      ctx.bezierCurveTo(x + w * 0.28, waveY - 8, x + w * 0.62, waveY + 8, x + w - 8, waveY - 2);
+      const steps = 24;
+      for (let index = 0; index <= steps; index += 1) {
+        const angle = (index / steps) * Math.PI * 2;
+        const wobble = 1
+          + Math.sin(angle * 2 + phase) * 0.06
+          + Math.cos(angle * 3 + phase * 0.7) * 0.038
+          + Math.sin(angle * 5 + phase * 1.9) * 0.02;
+        const px = cx + Math.cos(angle) * (w / 2) * wobble * grow;
+        const py = cy + Math.sin(angle) * (h / 2) * wobble * grow;
+        if (index === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+    };
+
+    // Wet sand halo, then the water itself. The halo is what stops the pond
+    // from looking pasted on top of the grass.
+    ctx.save();
+    pond(1.1);
+    ctx.fillStyle = withAlpha('#6d8f86', 0.5);
+    ctx.fill();
+    pond(1.04);
+    ctx.fillStyle = withAlpha('#8fae95', 0.42);
+    ctx.fill();
+
+    pond(1);
+    ctx.save();
+    ctx.clip();
+    // Depth: shallow at the near shore, dark at the far edge.
+    ctx.fillStyle = linear(ctx, x, y, x + w * 0.35, y + h, '#8fd0c4', '#1d4a5e');
+    ctx.fillRect(x - 20, y - 20, w + 40, h + 40);
+    // Sky reflection pooling on the far half of the surface.
+    const reflect = ctx.createLinearGradient(0, y, 0, y + h * 0.55);
+    reflect.addColorStop(0, withAlpha('#dff4e8', 0.4));
+    reflect.addColorStop(1, withAlpha('#dff4e8', 0));
+    ctx.fillStyle = reflect;
+    ctx.fillRect(x - 20, y - 20, w + 40, h * 0.6);
+
+    // Moon-side specular streak. Water that never catches a highlight is the
+    // fastest way to make a pond look like painted card.
+    const glintX = x + w * 0.66;
+    const glintW = w * 0.13;
+    const glint = ctx.createLinearGradient(glintX - glintW, 0, glintX + glintW, 0);
+    glint.addColorStop(0, 'rgba(255,246,214,0)');
+    glint.addColorStop(0.5, withAlpha('#fff6d6', 0.32));
+    glint.addColorStop(1, 'rgba(255,246,214,0)');
+    ctx.fillStyle = glint;
+    ctx.fillRect(x - 20, y - 20, w + 40, h + 40);
+
+    // Ripples, shortened away from the edges so they read as surface, not lines
+    // crossing a rectangle.
+    for (let index = 0; index < 6; index += 1) {
+      const waveY = y + 10 + index * ((h - 16) / 6) + Math.sin(time * 1.4 + index * 1.3) * 2;
+      const inset = 14 + Math.abs(waveY - cy) * 0.1;
+      ctx.strokeStyle = withAlpha('#eafff4', (0.5 - index * 0.05) * (0.6 + Math.sin(time * 2 + index) * 0.2));
+      ctx.lineWidth = index === 0 ? 2.6 : 1.3;
+      ctx.beginPath();
+      ctx.moveTo(x + inset, waveY);
+      ctx.bezierCurveTo(x + w * 0.3, waveY - 7, x + w * 0.62, waveY + 7, x + w - inset, waveY - 2);
       ctx.stroke();
     }
+
+    // Lily pads with a contact shadow on the water, and a lit rim on the moon
+    // side so they sit in the pond instead of floating above it.
     for (let index = 0; index < 3; index += 1) {
       const lx = x + w * (0.24 + index * 0.26);
-      const ly = y + h * (0.28 + (index % 2) * 0.34) + Math.sin(time * 0.9 + index) * 2;
-      ellipse(ctx, lx, ly, 11, 5, withAlpha('#8acb8f', 0.72));
-      circle(ctx, lx + 2, ly - 1, 2.4, '#f4c95d');
+      const ly = y + h * (0.3 + (index % 2) * 0.34) + Math.sin(time * 0.9 + index) * 2;
+      const bob = Math.sin(time * 1.3 + index * 2.1) * 1.2;
+      ellipse(ctx, lx + 1, ly + bob + 3, 12, 5.5, withAlpha('#123a44', 0.3));
+      ellipse(ctx, lx, ly + bob, 11, 5, withAlpha('#6fb583', 0.86));
+      ctx.strokeStyle = withAlpha('#d8f0b4', 0.5);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(lx, ly + bob, 11, 5, 0, Math.PI * 0.85, Math.PI * 1.85);
+      ctx.stroke();
+      circle(ctx, lx + 2, ly + bob - 1, 2.6, withAlpha('#fff0bb', 0.95));
     }
     ctx.restore();
-    roundRect(ctx, x, y, w, h, radius, 'rgba(15,28,46,0)', '#0f1c2e', 3.5);
-    softLight(ctx, x + w * 0.28, y + 10, w * 0.32, 13, '#e0fff0', 0.2);
+
+    // Shoreline: a dark wet edge on the near side, a thin lit lip on the far
+    // side, so the pond has a readable direction of light.
+    pond(1);
+    ctx.strokeStyle = withAlpha('#12313f', 0.55);
+    ctx.lineWidth = 2.6;
+    ctx.stroke();
+    ctx.save();
+    ctx.clip();
+    ctx.strokeStyle = withAlpha('#cdf3e2', 0.3);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, (w / 2) * 0.99, (h / 2) * 0.99, 0, Math.PI * 1.08, Math.PI * 1.94);
+    ctx.stroke();
+    ctx.restore();
+    ctx.restore();
+
+    softLight(ctx, x + w * 0.3, y + 8, w * 0.34, 12, '#e0fff0', 0.16);
   } else if (obstacle.kind === 'flower') {
-    for (let index = 0; index < 7; index += 1) circle(ctx, x + 10 + index * 13, y + h * 0.5, 4, index % 2 ? '#f4c95d' : '#e88d82');
+    // A clump of real flowers: each on a leaning stem with a lit crown and a
+    // contact shadow, rather than a row of flat discs that read as scattered
+    // pixels on the ground.
+    const flowerSeed = hashString(`flowers:${Math.round(x)}:${Math.round(y)}`);
+    const flowerRandom = new SeededRandom(flowerSeed);
+    const petalColors = ['#f4c95d', '#e88d82', '#f6efe0', '#d8a6e0'];
+    for (let index = 0; index < 7; index += 1) {
+      const fx = x + 9 + index * ((w - 18) / 6) + flowerRandom.range(-5, 5);
+      const fy = y + h * 0.5 + flowerRandom.range(-h * 0.2, h * 0.2);
+      const scale = flowerRandom.range(0.78, 1.16);
+      const lean = flowerRandom.range(-0.22, 0.22);
+      const headX = fx + lean * 9;
+      const headY = fy - 13 * scale;
+      ctx.strokeStyle = withAlpha('#4f7a5c', 0.72);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(fx, fy + 2 * scale);
+      ctx.quadraticCurveTo(fx + lean * 5, fy - 6 * scale, headX, headY);
+      ctx.stroke();
+      ellipse(ctx, fx + (lean > 0 ? 3.4 : -3.4) * scale, fy - 4 * scale, 4 * scale, 2 * scale, withAlpha('#5e8c62', 0.66));
+      ellipse(ctx, fx, fy + 2.6 * scale, 5 * scale, 2 * scale, withAlpha('#1d3a30', 0.26));
+      const petal = flowerRandom.pick(petalColors);
+      const rotation = flowerRandom.range(0, Math.PI * 2);
+      for (let p = 0; p < 5; p += 1) {
+        const pa = rotation + (p / 5) * Math.PI * 2;
+        ellipse(
+          ctx,
+          headX + Math.cos(pa) * 3.1 * scale,
+          headY + Math.sin(pa) * 3.1 * scale,
+          2.7 * scale,
+          2 * scale,
+          withAlpha(petal, 0.9),
+        );
+      }
+      circle(ctx, headX, headY, 2 * scale, withAlpha('#fff6d2', 0.92));
+    }
   }
 }
 
@@ -965,17 +1192,82 @@ function drawIslandTerrain(ctx: CanvasRenderingContext2D, zone: ZoneDefinition):
     const warm = index % 3 === 0;
     ellipse(ctx, px, py, pr, pr * 0.72, withAlpha(warm ? zone.haze : zone.ground, warm ? 0.13 : 0.3));
   }
-  // A worn dirt apron along the walking line, so the path is not the only
-  // sign of use on the island.
+
+  // Grass banding. Contour-following arcs are the strongest terrain cue at this
+  // zoom: they describe the curvature of the landform, which flat drifts cannot.
+  // A soft shadow band under each and a lit band over it fakes a low sun.
+  for (let index = 0; index < 7; index += 1) {
+    const arcRx = rx * (0.3 + index * 0.11);
+    const arcRy = ry * (0.26 + index * 0.1);
+    const offsetY = cy + ry * (0.34 - index * 0.1);
+    const wob = 0.06 + index * 0.012;
+    const band = (grow: number) => {
+      ctx.beginPath();
+      const steps = 20;
+      for (let s = 0; s <= steps; s += 1) {
+        const t = Math.PI * 1.06 + (s / steps) * Math.PI * 0.88;
+        const n = 1 + Math.sin(t * 2 + seed % 7) * wob;
+        const px = cx + Math.cos(t) * arcRx * grow * n;
+        const py = offsetY + Math.sin(t) * arcRy * grow * n;
+        if (s === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+    };
+    ctx.strokeStyle = withAlpha('#1e3a33', 0.09);
+    ctx.lineWidth = 13 - index;
+    band(1);
+    ctx.stroke();
+    ctx.strokeStyle = withAlpha(zone.groundAlt, 0.13);
+    ctx.lineWidth = 7 - index * 0.6;
+    ctx.save();
+    ctx.translate(0, -3);
+    band(1);
+    ctx.stroke();
+    ctx.restore();
+  }
+  // Worn dirt apron along the walking line. Layered passes of decreasing width
+  // and opacity: one uniform 62px stroke reads as a painted stripe, whereas a
+  // soft outer band with a tighter brighter core reads as compacted earth.
+  const trail = () => {
+    ctx.beginPath();
+    ctx.moveTo(cx - rx * 0.12, cy + ry * 0.86);
+    ctx.bezierCurveTo(cx - rx * 0.3, cy + ry * 0.3, cx + rx * 0.26, cy - ry * 0.1, cx + rx * 0.1, cy - ry * 0.82);
+  };
   ctx.save();
-  ctx.strokeStyle = withAlpha('#b6a077', 0.16);
-  ctx.lineWidth = 62;
   ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(cx - rx * 0.12, cy + ry * 0.86);
-  ctx.bezierCurveTo(cx - rx * 0.3, cy + ry * 0.3, cx + rx * 0.26, cy - ry * 0.1, cx + rx * 0.1, cy - ry * 0.82);
+  ctx.strokeStyle = withAlpha('#a98f68', 0.07);
+  ctx.lineWidth = 92;
+  trail();
+  ctx.stroke();
+  ctx.strokeStyle = withAlpha('#b6a077', 0.1);
+  ctx.lineWidth = 66;
+  trail();
+  ctx.stroke();
+  ctx.strokeStyle = withAlpha('#c9b389', 0.13);
+  ctx.lineWidth = 38;
+  trail();
+  ctx.stroke();
+  ctx.strokeStyle = withAlpha('#d8c69c', 0.12);
+  ctx.lineWidth = 16;
+  trail();
   ctx.stroke();
   ctx.restore();
+
+  // Patchy bare spots along the trail, breaking the stroke into ground that has
+  // been walked on rather than a ribbon laid over the island.
+  for (let index = 0; index < 14; index += 1) {
+    const t = index / 13;
+    // Walk the same bezier so patches land on the trail rather than beside it.
+    const bx = (1 - t) * (1 - t) * (1 - t) * (cx - rx * 0.12)
+      + 3 * (1 - t) * (1 - t) * t * (cx - rx * 0.3)
+      + 3 * (1 - t) * t * t * (cx + rx * 0.26)
+      + t * t * t * (cx + rx * 0.1);
+    const by = (1 - t) * (1 - t) * (1 - t) * (cy + ry * 0.86)
+      + 3 * (1 - t) * (1 - t) * t * (cy + ry * 0.3)
+      + 3 * (1 - t) * t * t * (cy - ry * 0.1)
+      + t * t * t * (cy - ry * 0.82);
+    ellipse(ctx, bx + random.range(-26, 26), by + random.range(-22, 22), random.range(14, 38), random.range(7, 18), withAlpha(index % 2 ? '#c2ab80' : zone.ground, 0.16));
+  }
 
   // Moonlight falls from the upper left, so lift that side and cool the rest.
   const light = ctx.createLinearGradient(cx - rx, cy - ry, cx + rx * 0.6, cy + ry);
@@ -1154,17 +1446,106 @@ function drawSky(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: numb
   circle(ctx, moonX, moonY, 27, linear(ctx, moonX - 24, moonY - 24, moonX + 24, moonY + 24, '#fff6d7', '#d7c39c'), withAlpha('#fff6d7', 0.6), 2);
   circle(ctx, moonX - 8, moonY - 6, 5, withAlpha('#c6b892', 0.22));
   circle(ctx, moonX + 9, moonY + 8, 3, withAlpha('#c6b892', 0.2));
+  // Terminator shading gives the disc volume; without it the moon reads as a
+  // flat sticker pasted on the gradient.
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(moonX, moonY, 26, 0, Math.PI * 2);
+  ctx.clip();
+  const moonShade = ctx.createLinearGradient(moonX - 26, moonY - 20, moonX + 26, moonY + 22);
+  moonShade.addColorStop(0, 'rgba(255,255,255,0)');
+  moonShade.addColorStop(0.58, withAlpha(zone.background, 0.16));
+  moonShade.addColorStop(1, withAlpha(zone.background, 0.42));
+  ctx.fillStyle = moonShade;
+  ctx.fillRect(moonX - 30, moonY - 30, 60, 60);
+  ctx.restore();
+
+  // Moon shafts, additive and very low alpha: they suggest volume in the air
+  // rather than drawing literal beams across the scene.
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  for (let index = 0; index < 4; index += 1) {
+    const angle = 0.62 + index * 0.17 + (reducedMotion ? 0 : Math.sin(time * 0.12 + index) * 0.012);
+    const length = 620;
+    const spread = 26 + (index % 2) * 16;
+    const alpha = 0.05 + (reducedMotion ? 1 : (Math.sin(time * 0.22 + index) + 1) * 0.018);
+    const beam = ctx.createLinearGradient(moonX, moonY, moonX + Math.cos(angle) * length, moonY + Math.sin(angle) * length);
+    beam.addColorStop(0, withAlpha('#fff3ca', alpha));
+    beam.addColorStop(0.5, withAlpha('#fff3ca', alpha * 0.45));
+    beam.addColorStop(1, withAlpha('#fff3ca', 0));
+    ctx.fillStyle = beam;
+    ctx.beginPath();
+    ctx.moveTo(moonX, moonY);
+    ctx.lineTo(moonX + Math.cos(angle - 0.03) * length - Math.sin(angle) * spread, moonY + Math.sin(angle - 0.03) * length + Math.cos(angle) * spread);
+    ctx.lineTo(moonX + Math.cos(angle + 0.03) * length + Math.sin(angle) * spread, moonY + Math.sin(angle + 0.03) * length - Math.cos(angle) * spread);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
 
   const random = new SeededRandom(hashString(`sky:${zone.id}`));
+
+  // A denser diagonal band reads as depth far better than a uniform scatter,
+  // and it puts the moon inside a sky rather than above an empty field.
+  for (let index = 0; index < 90; index += 1) {
+    const t = random.next();
+    const bandX = t * (BASE_WIDTH + 300) - 150;
+    const bandY = 60 + t * 210 + random.range(-46, 46);
+    if (bandX < -10 || bandX > BASE_WIDTH + 10 || bandY < 0 || bandY > BASE_HEIGHT) continue;
+    const bandDrift = reducedMotion ? 0 : Math.sin(time * 0.08 + index) * 5;
+    circle(ctx, bandX + bandDrift, bandY, random.range(0.6, 1.5), withAlpha('#fff2c7', random.range(0.12, 0.4)));
+  }
+
   for (let index = 0; index < 48; index += 1) {
     const x = random.range(0, BASE_WIDTH);
     const y = random.range(0, BASE_HEIGHT);
     const drift = reducedMotion ? 0 : Math.sin(time * 0.08 + index) * 8;
     const size = random.range(0.8, 2.8);
     const isStar = index % 6 === 0;
-    circle(ctx, x + drift, y, isStar ? size * 1.7 : size, withAlpha(isStar ? zone.accent : '#fff2c7', random.range(0.2, 0.72)));
-    if (isStar) star(ctx, x + drift, y, size * 1.5, withAlpha(zone.accent, 0.32), 4, time * 0.15 + index);
+    // A gentle twinkle keeps the field alive instead of pasted on.
+    const twinkle = reducedMotion ? 1 : 0.72 + (Math.sin(time * 1.1 + index * 1.7) + 1) * 0.14;
+    circle(ctx, x + drift, y, isStar ? size * 1.7 : size, withAlpha(isStar ? zone.accent : '#fff2c7', random.range(0.2, 0.72) * twinkle));
+    if (isStar) {
+      star(ctx, x + drift, y, size * 1.5, withAlpha(zone.accent, 0.32), 4, time * 0.15 + index);
+      // Diffraction cross on the brightest stars only, so it stays a highlight.
+      ctx.strokeStyle = withAlpha('#fff6d8', 0.34 * twinkle);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x + drift - size * 2.6, y);
+      ctx.lineTo(x + drift + size * 2.6, y);
+      ctx.moveTo(x + drift, y - size * 2.6);
+      ctx.lineTo(x + drift, y + size * 2.6);
+      ctx.stroke();
+    }
   }
+
+  // Distant sibling islets: parallax silhouettes that place the player inside an
+  // archipelago instead of a single disc floating in a void.
+  const islets = new SeededRandom(hashString(`islets:${zone.id}`));
+  for (let index = 0; index < 5; index += 1) {
+    const depth = index / 4;
+    const x = 26 + index * 106 + (reducedMotion ? 0 : Math.sin(time * 0.03 + index * 2.1) * 5 * (0.4 + depth));
+    const y = 236 + islets.range(0, 118);
+    const rx = islets.range(15, 30) * (1.15 - depth * 0.35);
+    const ry = rx * 0.42;
+    // Atmospheric perspective: further islets sit closer to the sky value.
+    const tone = mixHex(zone.background, zone.haze, 0.16 + depth * 0.2);
+    ellipse(ctx, x, y + rx * 0.5, rx * 1.04, rx * 0.6, withAlpha('#050d19', 0.34));
+    ellipse(ctx, x, y, rx, ry, withAlpha(tone, 0.66));
+    ellipse(ctx, x, y - ry * 0.34, rx * 0.52, ry * 0.42, withAlpha(zone.ground, 0.22));
+    if (index % 2 === 0) {
+      softLight(ctx, x, y - ry * 0.3, rx * 0.7, ry * 0.8, zone.accent, 0.16);
+      drawHangingLantern(ctx, x, y - ry * 0.5, 0.2, zone.accent, time, index);
+    }
+  }
+
+  // Warm bounce along the lower horizon, where the island lantern light would
+  // spill onto the cloud sea below.
+  const horizon = ctx.createLinearGradient(0, BASE_HEIGHT * 0.6, 0, BASE_HEIGHT);
+  horizon.addColorStop(0, withAlpha(zone.accent, 0));
+  horizon.addColorStop(1, withAlpha(zone.accent, 0.16));
+  ctx.fillStyle = horizon;
+  ctx.fillRect(0, BASE_HEIGHT * 0.6, BASE_WIDTH, BASE_HEIGHT * 0.4);
 
   for (let layer = 0; layer < 3; layer += 1) {
     const y = 100 + layer * 290 + (reducedMotion ? 0 : Math.sin(time * 0.06 + layer) * 9);
@@ -1190,6 +1571,18 @@ function drawSky(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: numb
         ctx.lineTo(x - 5, yy + 13);
         ctx.stroke();
       }
+    }
+    // A few brighter, faster foreground streaks: without a near layer the rain
+    // reads as a flat screen texture instead of depth.
+    ctx.strokeStyle = 'rgba(214, 248, 244, 0.34)';
+    ctx.lineWidth = 1.8;
+    for (let index = 0; index < 12; index += 1) {
+      const streakX = ((index * 137) % (BASE_WIDTH + 60)) - 30;
+      const streakY = reducedMotion ? (index * 71) % BASE_HEIGHT : ((time * 190 + index * 91) % (BASE_HEIGHT + 90)) - 45;
+      ctx.beginPath();
+      ctx.moveTo(streakX, streakY);
+      ctx.lineTo(streakX - 9, streakY + 24);
+      ctx.stroke();
     }
   }
 }
@@ -1859,6 +2252,72 @@ export function drawBattleScene(
     if (index % 11 === 0) star(ctx, x, y, size * 1.8, withAlpha('#f4c95d', 0.25), 4, options.time * 0.1 + index);
   }
 
+  // Mid-ground backdrop. Without it the arena reads as a disc floating in an
+  // empty void; these silhouettes tie the fight back to the island the player
+  // walked in from.
+  // A soft dusk glow behind the arena, strongest right around the lantern
+  // garland. Contrast here is doing the work: the backdrop stays lower in value
+  // than the lit floor so the fighters keep the eye, and the warm halo gives
+  // the void a centre instead of leaving it flat.
+  const backGlow = ctx.createRadialGradient(240, 300, 20, 240, 300, 400);
+  backGlow.addColorStop(0, withAlpha(options.flame > 50 ? '#f4c95d' : '#7ccabc', options.intro > 0 ? 0.05 : 0.13));
+  backGlow.addColorStop(0.4, withAlpha('#2a4a5c', 0.16));
+  backGlow.addColorStop(1, 'rgba(10, 18, 31, 0)');
+  ctx.fillStyle = backGlow;
+  ctx.fillRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
+
+  // Very low-contrast weather streaks, only visible in the darker corners. Kept
+  // subtle on purpose: a mid-value shape anywhere near the arena competes with
+  // the fight and reads as a smudge rather than as depth.
+  const hazeRandom = new SeededRandom(20260929);
+  for (let index = 0; index < 9; index += 1) {
+    const side = index % 2 === 0 ? -30 : BASE_WIDTH + 30;
+    const hy = hazeRandom.range(120, 720);
+    const hrx = hazeRandom.range(40, 78);
+    const drift = options.reducedMotion ? 0 : Math.sin(options.time * 0.06 + index * 1.4) * 6;
+    const tone = mixHex('#101c30', '#46647a', hazeRandom.range(0.2, 0.5));
+    ellipse(ctx, side + drift, hy, hrx, hazeRandom.range(9, 17), withAlpha(tone, 0.3));
+    ellipse(ctx, side + drift - hrx * 0.2, hy - 6, hrx * 0.5, hazeRandom.range(5, 9), withAlpha(mixHex(tone, '#a8c6d2', 0.35), 0.22));
+  }
+
+  // Drifting motes between backdrop and arena, the cheapest possible depth cue.
+  for (let index = 0; index < 14; index += 1) {
+    const mx = (hazeRandom.range(0, BASE_WIDTH) + (options.reducedMotion ? 0 : Math.sin(options.time * 0.3 + index) * 9)) % BASE_WIDTH;
+    const rise = options.reducedMotion ? hazeRandom.range(0, 200) : (options.time * 13 + index * 57) % 210;
+    const my = 660 - rise;
+    circle(ctx, mx, my, hazeRandom.range(0.9, 2.1), withAlpha(index % 3 === 0 ? '#f4c95d' : '#cfe9df', 0.1 + (rise / 210) * 0.16));
+  }
+
+  // A strung garland of lanterns across the upper frame. One sagging catenary
+  // with lanterns hung at intervals reads as a strung cable; five separate
+  // vertical stubs read as floating props, which is what the old code drew.
+  const garland = (fromX: number, toX: number, baseY: number, sag: number) => {
+    const pointAt = (t: number): [number, number] => [fromX + (toX - fromX) * t, baseY + Math.sin(t * Math.PI) * sag];
+    ctx.strokeStyle = withAlpha('#f4c95d', 0.2);
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    for (let index = 0; index <= 24; index += 1) {
+      const [px, py] = pointAt(index / 24);
+      if (index === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    for (let index = 1; index < 5; index += 1) {
+      const t = index / 5;
+      const [lx, ly] = pointAt(t);
+      ctx.strokeStyle = withAlpha('#f4c95d', 0.16);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(lx, ly);
+      ctx.lineTo(lx, ly + 7);
+      ctx.stroke();
+      softLight(ctx, lx, ly + 18, 78, 70, '#f4c95d', 0.15);
+      drawHangingLantern(ctx, lx, ly + 7, 0.32, '#f4c95d', options.time, index * 1.7);
+    }
+  };
+  garland(-14, BASE_WIDTH * 0.58, 150, 34);
+  garland(BASE_WIDTH * 0.46, BASE_WIDTH + 14, 118, 28);
+
   // Layered arena with a warm inner light and a cool outer rim.
   ctx.save();
   ctx.translate(240, 430);
@@ -1958,6 +2417,23 @@ export function drawBattleScene(
     const angle = index / 34 * Math.PI * 2;
     const radius = 120 + (index % 3) * 15;
     star(ctx, Math.cos(angle) * radius, Math.sin(angle) * radius * 0.78, 2 + (index % 2), withAlpha(options.flame > 50 ? '#f4c95d' : '#d8e5d3', 0.42), 4, angle + options.time * 0.05);
+  }
+  ctx.restore();
+
+  // Ground mist at the platform foot. Drawn after the arena so it sits in front
+  // and hides the hard cut where the disc meets the backdrop.
+  ctx.save();
+  ctx.translate(shakeX, shakeY);
+  for (let band = 0; band < 3; band += 1) {
+    const drift = options.reducedMotion ? 0 : Math.sin(options.time * 0.19 + band * 2.1) * 16;
+    const mistY = 596 + band * 26;
+    const mistAlpha = (options.intro > 0 ? 0.07 : 0.12) - band * 0.022;
+    for (let index = 0; index < 3; index += 1) {
+      const mx = 108 + index * 132 + drift + (band % 2) * 44;
+      softLight(ctx, mx, mistY, 168, 54, '#bcd8d6', mistAlpha);
+      ellipse(ctx, mx, mistY, 96, 20, withAlpha('#cfe4e0', mistAlpha * 0.8));
+      ellipse(ctx, mx + 42, mistY - 7, 66, 24, withAlpha('#cfe4e0', mistAlpha * 0.66));
+    }
   }
   ctx.restore();
 
