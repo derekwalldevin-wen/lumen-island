@@ -791,6 +791,37 @@ function drawGroundTexture(ctx: CanvasRenderingContext2D, zone: ZoneDefinition):
 
 function drawScatterDecor(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: number): void {
   const random = new SeededRandom(hashString(`decor:${zone.id}`));
+
+  // Low, rounded stones and flower clumps sit on the ground plane. They give
+  // the eye something to measure the island against, which flat colour cannot.
+  for (let index = 0; index < 26; index += 1) {
+    const x = random.range(50, zone.width - 50);
+    const y = random.range(60, zone.height - 45);
+    const size = random.range(4, 9);
+    if (index % 3 === 0) {
+      // Flower clump: a few blossoms on short stems.
+      const tint = index % 6 === 0 ? '#f4c95d' : index % 6 === 3 ? '#e98a7e' : '#c6a9e4';
+      for (let bloom = 0; bloom < 3; bloom += 1) {
+        const bx = x + random.range(-size, size);
+        const by = y + random.range(-3, 3);
+        const sway = Math.sin(time * 1.1 + index + bloom) * 1.2;
+        ctx.strokeStyle = withAlpha('#4c7a5f', 0.8);
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.quadraticCurveTo(bx + sway, by - 4, bx + sway * 1.4, by - 7);
+        ctx.stroke();
+        circle(ctx, bx + sway * 1.4, by - 7, 2.1, tint);
+        circle(ctx, bx + sway * 1.4, by - 7, 0.9, '#fff6dc');
+      }
+    } else {
+      // Stone: a lit cap over a shadowed base, with a contact shadow.
+      ellipse(ctx, x, y + 1.5, size * 1.15, size * 0.4, 'rgba(9, 19, 32, 0.26)');
+      ellipse(ctx, x, y, size, size * 0.66, linear(ctx, x - size, y - size * 0.6, x + size, y + size * 0.5, '#8d9a94', '#4d5c60'));
+      ellipse(ctx, x - size * 0.28, y - size * 0.22, size * 0.5, size * 0.28, withAlpha('#dfe8dc', 0.5));
+    }
+  }
+
   for (let index = 0; index < 52; index += 1) {
     const x = random.range(35, zone.width - 35);
     const y = random.range(45, zone.height - 35);
@@ -924,19 +955,33 @@ function drawIslandTerrain(ctx: CanvasRenderingContext2D, zone: ZoneDefinition):
   ctx.fill();
   ctx.clip();
 
-  // Broad tonal drifts keep the plate from reading as one flat wash.
-  for (let index = 0; index < 7; index += 1) {
-    const px = cx + random.range(-rx * 0.8, rx * 0.8);
-    const py = cy + random.range(-ry * 0.8, ry * 0.8);
-    const pr = random.range(rx * 0.24, rx * 0.5);
-    ellipse(ctx, px, py, pr, pr * 0.78, withAlpha(index % 2 ? zone.groundAlt : zone.ground, 0.24));
+  // Broad tonal drifts keep the plate from reading as one flat wash. They are
+  // deliberately large and low-frequency: small speckles do not read as
+  // terrain at this camera distance, only as noise.
+  for (let index = 0; index < 11; index += 1) {
+    const px = cx + random.range(-rx * 0.85, rx * 0.85);
+    const py = cy + random.range(-ry * 0.85, ry * 0.85);
+    const pr = random.range(rx * 0.28, rx * 0.62);
+    const warm = index % 3 === 0;
+    ellipse(ctx, px, py, pr, pr * 0.72, withAlpha(warm ? zone.haze : zone.ground, warm ? 0.13 : 0.3));
   }
+  // A worn dirt apron along the walking line, so the path is not the only
+  // sign of use on the island.
+  ctx.save();
+  ctx.strokeStyle = withAlpha('#b6a077', 0.16);
+  ctx.lineWidth = 62;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - rx * 0.12, cy + ry * 0.86);
+  ctx.bezierCurveTo(cx - rx * 0.3, cy + ry * 0.3, cx + rx * 0.26, cy - ry * 0.1, cx + rx * 0.1, cy - ry * 0.82);
+  ctx.stroke();
+  ctx.restore();
 
   // Moonlight falls from the upper left, so lift that side and cool the rest.
   const light = ctx.createLinearGradient(cx - rx, cy - ry, cx + rx * 0.6, cy + ry);
-  light.addColorStop(0, withAlpha(zone.haze, 0.2));
-  light.addColorStop(0.46, withAlpha(zone.haze, 0.05));
-  light.addColorStop(1, 'rgba(8, 20, 34, 0.24)');
+  light.addColorStop(0, withAlpha(zone.haze, 0.26));
+  light.addColorStop(0.42, withAlpha(zone.haze, 0.04));
+  light.addColorStop(1, 'rgba(8, 20, 34, 0.3)');
   ctx.fillStyle = light;
   ctx.fillRect(cx - rx * 1.1, cy - ry * 1.1, rx * 2.2, ry * 2.2);
   ctx.restore();
@@ -1252,6 +1297,88 @@ export function drawWorldScene(
 
   ctx.restore();
   drawVignette(ctx, zone.safe ? 0.25 : 0.38);
+}
+
+/**
+ * Compact orientation map for the world HUD. The zones are far larger than the
+ * viewport, so without this a player has no spatial sense of where the objective
+ * is relative to them, only a distance in pixels.
+ */
+export function drawMinimap(
+  ctx: CanvasRenderingContext2D,
+  world: WorldRuntime,
+  options: { width: number; height: number; guideX: number | null; guideY: number | null; guideGate: boolean; inRange: boolean },
+): void {
+  const zone = world.currentZone;
+  const { width, height } = options;
+  const pad = 7;
+  const scale = Math.min((width - pad * 2) / zone.width, (height - pad * 2) / zone.height);
+  const offsetX = (width - zone.width * scale) / 2;
+  const offsetY = (height - zone.height * scale) / 2;
+  const toMap = (x: number, y: number): [number, number] => [offsetX + x * scale, offsetY + y * scale];
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = 'rgba(11, 20, 34, 0.86)';
+  ctx.fillRect(0, 0, width, height);
+
+  // Island plate, using the same silhouette family as the world render.
+  const cx = offsetX + zone.width * scale * 0.5;
+  const cy = offsetY + zone.height * scale * 0.5;
+  organicOutline(ctx, cx, cy, zone.width * 0.475 * scale, zone.height * 0.475 * scale, hashString(`island:${zone.id}`), 0.05, 40);
+  ctx.fillStyle = withAlpha(zone.ground, 0.5);
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(zone.haze, 0.32);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.save();
+  organicOutline(ctx, cx, cy, zone.width * 0.475 * scale, zone.height * 0.475 * scale, hashString(`island:${zone.id}`), 0.05, 40);
+  ctx.clip();
+
+  // Encounter grass reads as a hazard zone rather than decoration.
+  for (const patch of zone.grass) {
+    const [gx, gy] = toMap(patch.x + patch.w / 2, patch.y + patch.h / 2);
+    ellipse(ctx, gx, gy, patch.w * 0.5 * scale, patch.h * 0.5 * scale, withAlpha('#f4c95d', 0.22));
+  }
+  // Buildings give the map landmarks to navigate by.
+  for (const obstacle of zone.obstacles) {
+    if (obstacle.kind !== 'house' && obstacle.kind !== 'forge') continue;
+    const built = obstacle.kind === 'house'
+      ? (world.save.world.buildings.cottage ?? 0) > 0
+      : (world.save.world.buildings.forge ?? 0) > 0;
+    if (!built) continue;
+    const [bx, by] = toMap(obstacle.x + obstacle.w / 2, obstacle.y + obstacle.h / 2);
+    roundRect(ctx, bx - 2.5, by - 2.5, 5, 5, 1, withAlpha('#f4c95d', 0.8));
+  }
+  ctx.restore();
+
+  // Interactables: gates and portals get a distinct ring so travel points read.
+  for (const interactable of zone.interactables) {
+    const [ix, iy] = toMap(interactable.x, interactable.y);
+    const isTravel = interactable.kind === 'portal' || interactable.kind === 'exit' || interactable.kind === 'gate';
+    circle(ctx, ix, iy, isTravel ? 2.6 : 2, withAlpha(isTravel ? '#7ccabc' : '#e88470', 0.9));
+  }
+
+  // Objective marker.
+  if (options.guideX !== null && options.guideY !== null) {
+    const [gx, gy] = toMap(options.guideX, options.guideY);
+    const color = options.guideGate ? '#7ccabc' : options.inRange ? '#fff0b8' : '#f4c95d';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(gx, gy, 5.5, 0, Math.PI * 2);
+    ctx.stroke();
+    star(ctx, gx, gy, 3, color, 4, 0.4);
+  }
+
+  // Player last so it always reads on top.
+  const [px, py] = toMap(world.x, world.y);
+  circle(ctx, px, py, 3.4, '#fff6dc', '#17243a', 1.4);
+  circle(ctx, px, py, 1.2, '#e88470');
+
+  ctx.strokeStyle = withAlpha(zone.haze, 0.22);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
 }
 
 /** Pulsing ring on the ground that marks the current objective. */
@@ -1758,18 +1885,18 @@ export function drawBattleScene(
   ctx.fillStyle = linear(ctx, 0, -180, 0, 220, '#33485a', '#101d2c');
   ctx.fill();
   platform(0, 0, 1);
-  ctx.fillStyle = options.intro > 0 ? '#222c40' : linear(ctx, -210, -210, 210, 210, '#7d9089', '#31485a');
+  ctx.fillStyle = options.intro > 0 ? '#222c40' : linear(ctx, -210, -230, 210, 210, '#93a08d', '#2c4356');
   ctx.fill();
   ctx.strokeStyle = '#0b1727';
   ctx.lineWidth = 9;
   ctx.stroke();
-  ctx.strokeStyle = withAlpha('#f4d79a', 0.62);
+  ctx.strokeStyle = withAlpha('#f4d79a', 0.7);
   ctx.lineWidth = 3;
   ctx.stroke();
 
   // Arena floor: worn stone with a lantern circle burned into it.
   ctx.save();
-  ellipse(ctx, 0, 2, 178, 174, options.intro > 0 ? '#2a3448' : linear(ctx, -180, -180, 180, 180, '#8aa08c', '#4a6363'));
+  ellipse(ctx, 0, 2, 178, 174, options.intro > 0 ? '#2a3448' : linear(ctx, -180, -190, 180, 180, '#a3ad8c', '#3f5a5c'));
   ctx.clip();
   const floorSeed = 4242;
   const floorRandom = new SeededRandom(floorSeed);
@@ -1789,12 +1916,29 @@ export function drawBattleScene(
     ctx.stroke();
   }
   // Concentric lantern rings anchor the eye at centre stage.
-  ctx.strokeStyle = withAlpha('#f4d79a', options.intro > 0 ? 0.1 : 0.26);
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = withAlpha('#ffe0a0', options.intro > 0 ? 0.12 : 0.4);
+  ctx.lineWidth = 2.4;
   for (const ring of [70, 118, 158]) {
     ctx.beginPath();
     ctx.ellipse(0, 2, ring, ring * 0.96, 0, 0, Math.PI * 2);
     ctx.stroke();
+  }
+  // Embers drifting off the lantern circle, so the stage feels lit from within.
+  if (options.intro <= 0) {
+    for (let index = 0; index < 16; index += 1) {
+      const angle = index / 16 * Math.PI * 2 + options.time * 0.22;
+      const radius = 92 + (index % 3) * 24;
+      const lift = (options.time * 9 + index * 11) % 40;
+      star(
+        ctx,
+        Math.cos(angle) * radius,
+        Math.sin(angle) * radius * 0.8 - lift * 0.4,
+        2.4,
+        withAlpha('#ffd98a', 0.42 * (1 - lift / 40)),
+        4,
+        angle,
+      );
+    }
   }
   // Moon-side falloff across the floor.
   const floorLight = ctx.createLinearGradient(-180, -180, 150, 180);

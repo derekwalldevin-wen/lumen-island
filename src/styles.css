@@ -310,6 +310,38 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--gold); outl
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
 
+/* Minimap: orientation without stealing the playfield */
+.minimap-frame {
+  position: absolute; z-index: 4; left: 16px; top: 108px; padding: 5px;
+  background: linear-gradient(150deg, rgba(34, 60, 79, .92), rgba(13, 26, 43, .9));
+  border: 1px solid rgba(244, 201, 93, .42); border-radius: 3px 10px 3px 9px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), 0 8px 18px rgba(3, 9, 18, .34);
+  pointer-events: none; opacity: 0; transform: translateX(-8px);
+  transition: opacity .24s ease, transform .24s cubic-bezier(.2, .9, .25, 1);
+}
+.game-frame[data-mode="world"] .minimap-frame { opacity: 1; transform: translateX(0); }
+.minimap-frame canvas { display: block; border-radius: 2px 6px 2px 5px; }
+.minimap-frame__label {
+  display: block; margin-top: 4px; text-align: center;
+  font: 700 10px/1.3 "STKaiti", "KaiTi", serif; color: var(--gold-pale);
+  letter-spacing: .08em;
+}
+@media (max-width: 720px) {
+  /* The mobile HUD stacks the quest sign, resources and player stamp in one
+     column down to roughly 160px, so the map moves below it rather than
+     overlapping. It stays top-left; the guide card owns the bottom. */
+  .minimap-frame { top: 172px; left: 10px; padding: 4px; }
+  .minimap-frame canvas { width: 78px; height: 104px; }
+  .minimap-frame__label { font-size: 9px; }
+}
+@media (pointer: coarse) {
+  .minimap-frame { top: 172px; }
+  .minimap-frame canvas { width: 72px; height: 96px; }
+}
+@media (max-height: 620px) {
+  .minimap-frame { display: none; }
+}
+
 /* Onboarding guide card, coach marks and mobile interact button */
 .guide-card {
   position: absolute; z-index: 5; left: 50%; bottom: 52px; transform: translate(-50%, 14px);
@@ -323,6 +355,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--gold); outl
 .guide-card[data-visible="true"] { opacity: 1; transform: translate(-50%, 0); }
 .guide-card[data-needs-travel="true"] { border-left-color: var(--teal); }
 .guide-card[data-in-range="true"] { border-left-color: var(--gold-pale); box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 0 0 1px rgba(255, 240, 184, .38), 0 12px 26px rgba(3, 9, 18, .42); }
+.guide-card[data-compact="true"] { bottom: 16px; padding: 8px 12px 9px; width: min(380px, calc(100% - 32px)); }
+.guide-card[data-compact="true"] .guide-card__hint { display: none; }
+.guide-card[data-compact="true"] .guide-card__title { font-size: 14px; }
+.guide-card[data-compact="true"] .guide-card__foot { margin-top: 5px; }
+@media (pointer: coarse) {
+  .guide-card[data-compact="true"] { bottom: 148px; }
+}
 .guide-card__head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 4px; }
 .guide-card__step { font: 700 9px/1.2 Georgia, serif; letter-spacing: .18em; color: var(--gold); }
 .guide-card__distance { font: 700 11px/1.2 Georgia, serif; color: var(--muted); }

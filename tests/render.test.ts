@@ -5,6 +5,7 @@ import {
   BASE_WIDTH,
   drawBattleScene,
   drawHero,
+  drawMinimap,
   drawTitleScene,
   drawWorldScene,
 } from '../src/render/visuals';
@@ -194,6 +195,35 @@ describe('render smoke tests', () => {
       ...baseOptions(), shake: 0, flame: 0, combo: 0, intro: 0.5, weaponType: 'bell',
     });
     expect(countOf(ctx)).toBeGreaterThan(300);
+  });
+
+  it('draws the minimap for every zone with and without an objective marker', () => {
+    for (const zoneId of Object.keys(ZONES) as ZoneId[]) {
+      const save = createInitialSave(0);
+      save.world.currentZone = zoneId;
+      save.world.buildings = { cottage: 2, forge: 1 };
+      const world = new WorldRuntime(save);
+      for (const guide of [
+        { guideX: null, guideY: null, guideGate: false, inRange: false },
+        { guideX: 450, guideY: 500, guideGate: false, inRange: true },
+        { guideX: 450, guideY: 935, guideGate: true, inRange: false },
+      ]) {
+        const ctx = asContext();
+        drawMinimap(ctx, world, { width: 132, height: 176, ...guide });
+        expect(countOf(ctx), `${zoneId} minimap produced too few draw calls`).toBeGreaterThan(40);
+      }
+    }
+  });
+
+  it('keeps the minimap aspect box independent of zone size', () => {
+    // A tall zone must letterbox inside the fixed HUD box, never overflow it.
+    for (const zoneId of Object.keys(ZONES) as ZoneId[]) {
+      const zone = ZONES[zoneId];
+      const pad = 7;
+      const scale = Math.min((132 - pad * 2) / zone.width, (176 - pad * 2) / zone.height);
+      expect(zone.width * scale).toBeLessThanOrEqual(132 - pad * 2 + 0.001);
+      expect(zone.height * scale).toBeLessThanOrEqual(176 - pad * 2 + 0.001);
+    }
   });
 
   it('keeps the design-space size used by every scene constant', () => {

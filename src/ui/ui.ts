@@ -31,6 +31,8 @@ export interface GuideHudState {
   inRange: boolean;
   detour: boolean;
   visible: boolean;
+  /** True once the tutorial is behind the player; renders a condensed card. */
+  compact: boolean;
 }
 
 function escapeHtml(value: string): string {
@@ -138,6 +140,8 @@ export class UIController {
     this.setText('#guide-progress', state.progress);
     this.setText('#guide-input', state.inputHint);
     this.setText('#guide-distance', state.distance === null ? '' : `${state.distance} 步`);
+    // Compact past the tutorial: the headline and progress stay, the prose folds away.
+    card.dataset.compact = String(Boolean(state.visible) && state.compact);
     const marker = this.root.querySelector<HTMLElement>('#guide-marker');
     if (marker) marker.textContent = state.markerLabel ?? '';
   }
@@ -215,6 +219,19 @@ export class UIController {
 
   setTouchVisible(visible: boolean): void {
     this.frame.classList.toggle('touch-hidden', !visible);
+  }
+
+  /**
+   * Returns a context for the minimap canvas, or null when the element is absent
+   * (which only happens if the template is ever replaced).
+   */
+  getMinimapContext(): CanvasRenderingContext2D | null {
+    const canvas = this.root.querySelector<HTMLCanvasElement>('#minimap');
+    return canvas ? canvas.getContext('2d') : null;
+  }
+
+  setMinimapLabel(label: string): void {
+    this.setText('#minimap-label', label);
   }
 
   setTutorialBattleSeen(seen: boolean): void {
@@ -343,20 +360,24 @@ export class UIController {
             <button data-command="open-panel" data-panel="settings" aria-label="设置">设</button>
           </nav>
           <div id="world-prompt" class="world-prompt"></div>
-          <section id="guide-card" class="guide-card" data-visible="false" data-in-range="false" data-needs-travel="false" aria-live="polite" aria-label="当前目标指引">
-            <header class="guide-card__head">
-              <span class="guide-card__step" id="guide-step">第 1 / 9 步</span>
-              <span class="guide-card__distance" id="guide-distance"></span>
-            </header>
-            <b class="guide-card__title" id="guide-title">点亮第一盏灯</b>
-            <p class="guide-card__hint" id="guide-hint"></p>
-            <div class="guide-card__foot">
-              <span class="guide-card__marker" id="guide-marker"></span>
-              <span class="guide-card__progress" id="guide-progress"></span>
-              <span class="guide-card__input" id="guide-input">E</span>
-            </div>
-          </section>
         </header>
+
+        <!-- Sits on the frame, not inside #world-hud: the HUD grid is only ~72px
+             tall, so a bottom offset inside it would resolve against that box
+             and push the card off the top of the screen. -->
+        <section id="guide-card" class="guide-card" data-visible="false" data-in-range="false" data-needs-travel="false" data-compact="false" aria-live="polite" aria-label="当前目标指引">
+          <header class="guide-card__head">
+            <span class="guide-card__step" id="guide-step">第 1 / 9 步</span>
+            <span class="guide-card__distance" id="guide-distance"></span>
+          </header>
+          <b class="guide-card__title" id="guide-title">点亮第一盏灯</b>
+          <p class="guide-card__hint" id="guide-hint"></p>
+          <div class="guide-card__foot">
+            <span class="guide-card__marker" id="guide-marker"></span>
+            <span class="guide-card__progress" id="guide-progress"></span>
+            <span class="guide-card__input" id="guide-input">E</span>
+          </div>
+        </section>
 
         <section id="battle-hud" class="hud hud--battle" aria-label="战斗状态">
           <div class="battle-card battle-card--hero">
@@ -372,6 +393,11 @@ export class UIController {
           <div class="battle-skill-status"><span>技能 <b id="battle-skill-status">READY</b></span><span>闪避 <b id="battle-dodge-status">READY</b></span></div>
           <div id="battle-coach" class="battle-coach" aria-live="polite"></div>
         </section>
+
+        <div id="minimap-frame" class="minimap-frame" aria-hidden="true">
+          <canvas id="minimap" width="132" height="176"></canvas>
+          <span class="minimap-frame__label" id="minimap-label">灯火港</span>
+        </div>
 
         <div id="world-hint" class="desktop-hint"><kbd>WASD</kbd> 移动 <i></i><kbd>E</kbd> 互动 <i></i><kbd>B</kbd> 背包 <i></i><kbd>Esc</kbd> 菜单</div>
 

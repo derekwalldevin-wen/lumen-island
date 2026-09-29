@@ -7,7 +7,7 @@ import { InputController } from './core/input';
 import { SaveManager } from './save/saveManager';
 import { UIController } from './ui/ui';
 import { guideStepCount, isAtGuideMarker, resolveGuide } from './guide/guide';
-import { drawBattleScene, drawTitleScene, drawWorldScene, BASE_HEIGHT, BASE_WIDTH } from './render/visuals';
+import { drawBattleScene, drawMinimap, drawTitleScene, drawWorldScene, BASE_HEIGHT, BASE_WIDTH } from './render/visuals';
 import {
   advanceQuest,
   awardXp,
@@ -185,10 +185,29 @@ export class Game {
       }
     }
     this.render();
-    if (this.mode === 'world') this.updateWorldHud();
+    if (this.mode === 'world') {
+      this.updateWorldHud();
+      this.drawMinimap();
+    }
     if (this.mode === 'battle' && this.battle) this.ui.setBattleHud(this.battle.getHudState());
     this.raf = requestAnimationFrame(this.tick);
   };
+
+  /** Redraws the orientation map so the objective is always spatially locatable. */
+  private drawMinimap(): void {
+    const ctx = this.ui.getMinimapContext();
+    if (!ctx) return;
+    const guide = this.guide ?? resolveGuide(this.save, this.world.currentZone.id, this.world.x, this.world.y);
+    this.ui.setMinimapLabel(this.world.currentZone.name);
+    drawMinimap(ctx, this.world, {
+      width: 132,
+      height: 176,
+      guideX: guide.marker ? guide.marker.x : null,
+      guideY: guide.marker ? guide.marker.y : null,
+      guideGate: guide.marker?.kind === 'gate',
+      inRange: isAtGuideMarker(guide, this.world.x, this.world.y),
+    });
+  }
 
   private updateWorld(delta: number): void {
     const stats = getPlayerStats(this.save);
@@ -969,7 +988,10 @@ export class Game {
       markerLabel: guide.marker ? guide.marker.label : null,
       inRange: isAtGuideMarker(guide, this.world.x, this.world.y),
       detour: guide.step.detour,
-      visible: !this.save.world.guideSeen || this.save.world.questStage < 3,
+      // Guidance never disappears. Early steps get the full card; later steps
+      // stay reachable but compact so they do not crowd the scene.
+      visible: !this.save.world.guideSeen || this.save.world.questStage < 3 || this.save.world.endingSeen,
+      compact: this.save.world.guideSeen && this.save.world.questStage >= 3 && !this.save.world.endingSeen,
     });
   }
 
