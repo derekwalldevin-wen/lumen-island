@@ -1,5 +1,6 @@
 import './styles.css';
 import { Game } from './game';
+import { preloadSprites, setSpriteBasePath } from './render/sprites';
 
 const root = document.querySelector<HTMLElement>('#app');
 
@@ -8,6 +9,16 @@ if (!root) {
 }
 
 try {
+  // Art lives next to the bundle rather than at the server root, so the game
+  // keeps working when hosted from a project subpath.
+  setSpriteBasePath('art');
+  preloadSprites([
+    'hero', 'luma',
+    'cloudPuff', 'rainSprout', 'paperKite', 'mistCrab', 'inkBat', 'starSentinel',
+    'lanternMoth', 'bellWarden', 'starlessOwl',
+    'sprigFork', 'bellShoot', 'moonKnife', 'rainCane', 'cometAxe',
+    'forge', 'cottage', 'rainCanopy', 'starChart', 'lighthouse',
+  ]);
   const game = new Game(root);
   game.start();
   (window as Window & { __lumenIslandQuest?: Game }).__lumenIslandQuest = game;

@@ -12,6 +12,7 @@ import type {
   ZoneInteractable,
 } from '../types';
 import { hashString, SeededRandom } from '../core/rng';
+import { drawSprite, fitSprite, loadSprite, type SpriteId } from './sprites';
 import type { WorldRuntime } from '../world/worldRuntime';
 
 export const BASE_WIDTH = 480;
@@ -351,6 +352,46 @@ function drawWeapon(ctx: CanvasRenderingContext2D, type: WeaponType, flame: numb
   ctx.restore();
 }
 
+const WEAPON_SPRITES: Record<WeaponType, SpriteId> = {
+  branch: 'sprigFork',
+  bell: 'rainCane',
+  blade: 'moonKnife',
+};
+
+/**
+ * Small weapon badge beside the hero's shoulder.
+ *
+ * The character master sheet bakes the starting trident into the grip, so an
+ * equipped weapon drawn at full size in the hand reads as two weapons and covers
+ * the face. At badge scale the swap stays legible without fighting the portrait.
+ */
+function drawHeroWeaponBadge(
+  ctx: CanvasRenderingContext2D,
+  type: WeaponType,
+  flame: number,
+  x: number,
+  footY: number,
+  scale: number,
+  facingRight: boolean,
+): void {
+  const spriteId = WEAPON_SPRITES[type] ?? 'sprigFork';
+  const sprite = fitSprite(spriteId, 19 * scale, 1, 19 * scale);
+  if (!sprite) return;
+  // Above and outboard of the head: on the shoulder it sat over the satchel and
+  // read as part of the costume rather than as the equipped weapon.
+  const badgeX = x + (facingRight ? 22 : -22) * scale;
+  const badgeY = footY - 66 * scale;
+  const radius = 11.5 * scale;
+  if (flame > 22) softLight(ctx, badgeX, badgeY, radius * 2.6, radius * 2.6, '#f4c95d', 0.24);
+  circle(ctx, badgeX, badgeY, radius, withAlpha('#0d1828', 0.72));
+  ctx.strokeStyle = withAlpha(flame > 22 ? '#f4c95d' : '#9fc7d8', 0.85);
+  ctx.lineWidth = 1.4 * scale;
+  ctx.beginPath();
+  ctx.arc(badgeX, badgeY, radius, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.drawImage(sprite.image, badgeX - sprite.width / 2, badgeY - sprite.height / 2, sprite.width, sprite.height);
+}
+
 export function drawHero(ctx: CanvasRenderingContext2D, visual: HeroVisual): void {
   const scale = visual.scale ?? 1;
   const stride = visual.moving ? Math.sin(visual.walkPhase) * 3.2 : 0;
@@ -360,6 +401,26 @@ export function drawHero(ctx: CanvasRenderingContext2D, visual: HeroVisual): voi
   drawShadow(ctx, visual.x, visual.y + 3, 27 * scale, 0.3);
   softLight(ctx, visual.x, visual.y + 1, 40 * scale, 16 * scale, visual.flame > 22 ? '#f4c95d' : '#7ccabc', visual.flame > 22 ? 0.22 : 0.1);
   if (visual.flame > 22) drawStarburst(ctx, visual.x, visual.y - 26 * scale, 58 * scale, '#f4c95d', visual.walkPhase);
+
+  // Delivered character art replaces the drawn figure. The master sheet bakes
+  // the starting trident into the grip, so the equipped weapon is drawn as a
+  // small badge near the shoulder: a second full weapon in the hand just read
+  // as two weapons and buried the face.
+  const heroSprite = fitSprite('hero', 96 * scale, 1, 96 * scale * 1.05);
+  if (heroSprite) {
+    ctx.save();
+    if (hurt && Math.floor(visual.walkPhase * 12) % 2 === 0) ctx.globalAlpha = 0.48;
+    if (!facingRight) {
+      ctx.translate(visual.x, 0);
+      ctx.scale(-1, 1);
+      drawSprite(ctx, heroSprite, 0, visual.y + bob + 4);
+    } else {
+      drawSprite(ctx, heroSprite, visual.x, visual.y + bob + 4);
+    }
+    drawHeroWeaponBadge(ctx, visual.weaponType, visual.flame, visual.x, visual.y + bob, scale, facingRight);
+    ctx.restore();
+    return;
+  }
 
   ctx.save();
   ctx.translate(visual.x, visual.y + bob);
@@ -435,6 +496,11 @@ function drawLuma(ctx: CanvasRenderingContext2D, x: number, y: number, time: num
   drawShadow(ctx, x, y + 2, 30, 0.3);
   softLight(ctx, x, y - 10, 46, 26, '#f4c95d', 0.16);
   const bob = Math.sin(time * 1.4) * 1.5;
+  const sprite = fitSprite('luma', 96, 1, 100);
+  if (sprite) {
+    drawSprite(ctx, sprite, x, y + bob + 4);
+    return;
+  }
   ctx.save();
   ctx.translate(x, y + bob);
   const robe = linear(ctx, -22, -38, 22, 4, '#415b60', '#78918a', '#9eb3a0');
@@ -681,6 +747,12 @@ function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle, sa
       );
     }
   } else if (obstacle.kind === 'house') {
+    const cottageSprite = fitSprite('cottage', 132, 1, 140);
+    if (cottageSprite) {
+      drawShadow(ctx, x + w / 2, y + h + 4, w * 0.62, 0.3);
+      drawSprite(ctx, cottageSprite, x + w / 2, y + h + 4);
+      return;
+    }
     const level = save.world.buildings.cottage ?? 0;
     const body = level >= 2 ? '#c78269' : level === 1 ? '#8fa18d' : '#6e827a';
     roundRect(ctx, x + 5, y + 30, w - 10, h - 30, 7, linear(ctx, x, y + 30, x + w, y + h, body, '#3c5a5a'), '#0f1c2e', 3.5);
@@ -716,6 +788,15 @@ function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle, sa
       pathFill(ctx, [[x + 20, y + 66], [x + 32, y + 50], [x + 38, y + 50], [x + 26, y + 66]], withAlpha('#8fa8c4', 0.28));
     }
   } else if (obstacle.kind === 'forge') {
+    const forgeSprite = fitSprite('forge', 136, 1, 146);
+    if (forgeSprite) {
+      drawShadow(ctx, x + w / 2, y + h + 4, w * 0.62, 0.3);
+      // The forge keeps its ember bounce even as a sprite: losing the warm
+      // ground light made it read as an inert prop.
+      softLight(ctx, x + w / 2, y + h - 6, w * 0.9, 34, '#f4c95d', 0.16);
+      drawSprite(ctx, forgeSprite, x + w / 2, y + h + 4);
+      return;
+    }
     const level = save.world.buildings.forge ?? 0;
     // Stone base with a warm bounce along the lit edge.
     roundRect(ctx, x + 8, y + 28, w - 16, h - 28, 7, linear(ctx, x, y + 28, x + w, y + h, level ? '#8b9c91' : '#4a5860', '#31454e'), '#0f1c2e', 3.5);
@@ -1943,10 +2024,50 @@ function drawTitleIsland(ctx: CanvasRenderingContext2D, zone: ZoneDefinition): v
   ctx.restore();
 }
 
+/** Delivered art per enemy id. Anything unmapped falls back to the shapes below. */
+const ENEMY_SPRITES: Record<string, SpriteId> = {
+  cloudPuff: 'cloudPuff',
+  rainSprout: 'rainSprout',
+  paperKite: 'paperKite',
+  mistCrab: 'mistCrab',
+  inkBat: 'inkBat',
+  starSentinel: 'starSentinel',
+  lanternMoth: 'lanternMoth',
+  bellWarden: 'bellWarden',
+  starlessOwl: 'starlessOwl',
+};
+
+/**
+ * Sprite bodies are anchored by the feet line at `radius * 1.5` below the centre
+ * so a taller creature grows upward out of the same ground contact point instead
+ * of drifting off the floor the health bar is drawn on.
+ */
+function drawMonsterSprite(ctx: CanvasRenderingContext2D, entity: BattleEntity, bob: number): boolean {
+  const spriteId = ENEMY_SPRITES[entity.definitionId];
+  if (!spriteId) return false;
+  const definition = ENEMIES[entity.definitionId];
+  // Scale from the design radius rather than a flat multiplier: the procedural
+  // fallback filled the radius, but the delivered art is a full-body figure with
+  // its own proportions, so a 3x radius pushed bosses clear off the platform.
+  const isBoss = definition?.ai === 'boss';
+  const heightFactor = isBoss ? 2.5 : 2.75;
+  const target = entity.radius * heightFactor;
+  const sprite = fitSprite(spriteId, target, 1, target * 1.4);
+  if (!sprite) return false;
+  // Winged and paper types read wrong pinned to the ground, so they float.
+  const airborne = entity.definitionId === 'inkBat' || entity.definitionId === 'paperKite';
+  const footY = entity.y + entity.radius * 1.5 + bob + (airborne ? -entity.radius * 0.55 : 0);
+  if (entity.hitFlash > 0) ctx.globalAlpha = 0.68 + Math.sin(performance.now() * 0.05) * 0.22;
+  drawSprite(ctx, sprite, entity.x, footY);
+  if (entity.hitFlash > 0) ctx.globalAlpha = 1;
+  return true;
+}
+
 function drawMonsterBody(ctx: CanvasRenderingContext2D, entity: BattleEntity, time: number): void {
   const definitionSize = entity.radius;
   const bob = Math.sin(time * 2.5 + entity.x * 0.03) * 3;
   drawShadow(ctx, entity.x, entity.y + entity.radius * 0.42, entity.radius * 1.05, 0.3);
+  if (drawMonsterSprite(ctx, entity, bob)) return;
   ctx.save();
   ctx.translate(entity.x, entity.y + bob);
   if (entity.hitFlash > 0) ctx.globalAlpha = 0.68 + Math.sin(time * 50) * 0.22;
