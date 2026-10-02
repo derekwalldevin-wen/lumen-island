@@ -201,12 +201,17 @@ const ZONE_LIST: ZoneDefinition[] = [
       { id: 'to-cloudstep', x: 450, y: 935, radius: 76, kind: 'portal', label: '前往云阶草坡', target: 'cloudstep' },
     ],
     ambience: 'home',
+    terrain: { shape: 'harbor', landmark: 'lighthouse', blurb: '归航灯塔立在南岸的礁石上，是全岛最高的灯。' },
   },
   {
     id: 'cloudstep', name: '云阶草坡', subtitle: '第一盏灯在风里摇晃', level: 1, safe: false,
     width: 900, height: 1180, background: '#253c4d', ground: '#728f79', groundAlt: '#87a184', accent: '#f1c75b', haze: '#d9dfc4',
     encounters: ['cloudPuff', 'rainSprout'], requiredStage: 0, spawn: { x: 450, y: 1030 },
-    obstacles: [tree(135, 300, 1), tree(700, 245, 3), tree(170, 760, 5), tree(715, 810, 8), { x: 390, y: 530, w: 120, h: 90, kind: 'ruin' }],
+    // Terraces narrow the walkable line as the ground rises, so the climb reads
+    // as a climb and not as a longer corridor.
+    obstacles: [tree(135, 300, 1), tree(700, 245, 3), tree(170, 760, 5), tree(715, 810, 8), { x: 390, y: 530, w: 120, h: 90, kind: 'ruin' }, // Narrow enough to leave a walkable gap on at least one side. Full-width risers
+    // turned the island into a stack of corridors the player could not cross.
+    { x: 300, y: 430, w: 240, h: 26, kind: 'ledge' }, { x: 340, y: 690, w: 220, h: 26, kind: 'ledge' }],
     grass: [
       { x: 70, y: 430, w: 230, h: 130, chance: 0.34 },
       { x: 575, y: 570, w: 245, h: 165, chance: 0.36 },
@@ -214,15 +219,26 @@ const ZONE_LIST: ZoneDefinition[] = [
     ],
     interactables: [
       { id: 'cloud-return', x: 450, y: 1080, radius: 72, kind: 'exit', label: '返回灯火港', target: 'harbor' },
-      { id: 'paper-gate', x: 450, y: 150, radius: 82, kind: 'gate', label: '纸灯林 gate', target: 'paperwood' },
+      { id: 'paper-gate', x: 450, y: 150, radius: 82, kind: 'gate', label: '通往纸灯林', target: 'paperwood' },
     ],
     ambience: 'meadow',
+    terrain: { shape: 'terrace', landmark: 'stair', blurb: '一级级草台顺着风往上叠，越往上风越硬。' },
   },
   {
     id: 'paperwood', name: '纸灯林', subtitle: '一排纸灯同时低下头', level: 3, safe: false,
     width: 980, height: 1240, background: '#263047', ground: '#65715e', groundAlt: '#74836a', accent: '#e98e72', haze: '#c4b995',
     encounters: ['paperKite', 'cloudPuff', 'mistCrab'], bossId: 'lanternMoth', requiredStage: 2, spawn: { x: 490, y: 1110 },
-    obstacles: [tree(150, 250, 4), tree(370, 330, 9), tree(680, 270, 12), tree(805, 550, 6), tree(130, 690, 10), { x: 420, y: 670, w: 150, h: 90, kind: 'ruin' }],
+    // A thicket, not a lawn. The offset rows force the player to weave, which is
+    // the whole difference between this island and the meadow before it.
+    obstacles: [
+      tree(150, 250, 4), tree(370, 330, 9), tree(680, 270, 12), tree(805, 550, 6), tree(130, 690, 10),
+      // Thicket rows. Positions are chosen around the spawn, the two travel gates
+      // and the grass centres: a grove that walls off its own landmarks is a
+      // grove the player cannot use.
+      tree(300, 470, 31), tree(560, 560, 32), tree(860, 470, 33), tree(240, 880, 34),
+      tree(600, 930, 35), tree(860, 1010, 36), tree(430, 700, 37),
+      { x: 420, y: 670, w: 150, h: 90, kind: 'ruin' },
+    ],
     grass: [
       { x: 80, y: 410, w: 250, h: 210, chance: 0.4 },
       { x: 620, y: 400, w: 250, h: 240, chance: 0.42 },
@@ -231,15 +247,27 @@ const ZONE_LIST: ZoneDefinition[] = [
     interactables: [
       { id: 'paper-return', x: 490, y: 1160, radius: 72, kind: 'exit', label: '返回灯火港', target: 'harbor' },
       { id: 'lantern-boss', x: 490, y: 150, radius: 92, kind: 'boss', label: '吞灯蛹巢' },
-      { id: 'rain-gate', x: 860, y: 830, radius: 82, kind: 'gate', label: '雨芽花园 gate', target: 'rainbud' },
+      { id: 'rain-gate', x: 860, y: 830, radius: 82, kind: 'gate', label: '通往雨芽花园', target: 'rainbud' },
     ],
     ambience: 'wood',
+    terrain: { shape: 'grove', landmark: 'paperGrove', blurb: '纸灯挂满了枝头，风一过就一起低头。' },
   },
   {
     id: 'rainbud', name: '雨芽花园', subtitle: '雨点悬在花瓣上方', level: 6, safe: false,
     width: 1020, height: 1280, background: '#203a45', ground: '#527b79', groundAlt: '#618d86', accent: '#78d0c3', haze: '#c8e0d6',
     encounters: ['inkBat', 'rainSprout', 'starSentinel'], bossId: 'bellWarden', requiredStage: 4, spawn: { x: 510, y: 1150 },
-    obstacles: [tree(150, 330, 13), tree(760, 280, 16), { x: 420, y: 360, w: 160, h: 115, kind: 'water' }, { x: 160, y: 750, w: 120, h: 100, kind: 'ruin' }, { x: 700, y: 860, w: 120, h: 100, kind: 'ruin' }],
+    // Four pools instead of one. The gaps between them are the only routes, so
+    // the island reads as a water garden rather than a field with a pond on it.
+    obstacles: [
+      tree(150, 330, 13), tree(760, 280, 16),
+      { x: 420, y: 360, w: 160, h: 115, kind: 'water' },
+      { x: 160, y: 750, w: 120, h: 100, kind: 'ruin' },
+      { x: 700, y: 860, w: 120, h: 100, kind: 'ruin' },
+      { x: 110, y: 730, w: 120, h: 96, kind: 'water' },
+      { x: 700, y: 470, w: 132, h: 100, kind: 'water' },
+      { x: 330, y: 960, w: 148, h: 92, kind: 'water' },
+      { x: 790, y: 1000, w: 118, h: 88, kind: 'water' },
+    ],
     grass: [
       { x: 90, y: 510, w: 270, h: 190, chance: 0.43 },
       { x: 650, y: 520, w: 260, h: 210, chance: 0.44 },
@@ -248,15 +276,29 @@ const ZONE_LIST: ZoneDefinition[] = [
     interactables: [
       { id: 'rain-return', x: 510, y: 1195, radius: 72, kind: 'exit', label: '返回灯火港', target: 'harbor' },
       { id: 'bell-boss', x: 510, y: 155, radius: 94, kind: 'boss', label: '雨幕钟塔' },
-      { id: 'star-gate', x: 925, y: 660, radius: 82, kind: 'gate', label: '观星高台 gate', target: 'starfall' },
+      { id: 'star-gate', x: 925, y: 660, radius: 82, kind: 'gate', label: '通往观星高台', target: 'starfall' },
     ],
     ambience: 'rain',
+    terrain: { shape: 'lagoon', landmark: 'pond', blurb: '雨点悬在半空不落，水面一直保持着涟漪。' },
   },
   {
     id: 'starfall', name: '观星高台', subtitle: '最后一颗星仍未归位', level: 13, safe: false,
     width: 1080, height: 1320, background: '#18243a', ground: '#4d596d', groundAlt: '#59667a', accent: '#d5a6e8', haze: '#b5b4c9',
     encounters: ['inkBat', 'starSentinel', 'mistCrab'], bossId: 'starlessOwl', requiredStage: 6, spawn: { x: 540, y: 1190 },
-    obstacles: [tree(180, 360, 21), tree(820, 300, 22), { x: 450, y: 430, w: 180, h: 110, kind: 'ruin' }, { x: 190, y: 820, w: 130, h: 105, kind: 'ruin' }, { x: 760, y: 900, w: 130, h: 105, kind: 'ruin' }],
+    // A ring of plinths around the throne. Unlike every other island the walk
+    // goes outward first and closes at the top, so the final fight is approached
+    // through a corridor rather than straight up the middle.
+    obstacles: [
+      tree(180, 360, 21), tree(820, 300, 22),
+      { x: 450, y: 430, w: 180, h: 110, kind: 'ruin' },
+      { x: 190, y: 820, w: 130, h: 105, kind: 'ruin' },
+      { x: 760, y: 900, w: 130, h: 105, kind: 'ruin' },
+      { x: 380, y: 700, w: 40, h: 40, kind: 'plinth' },
+      { x: 660, y: 700, w: 40, h: 40, kind: 'plinth' },
+      { x: 380, y: 980, w: 40, h: 40, kind: 'plinth' },
+      { x: 660, y: 980, w: 40, h: 40, kind: 'plinth' },
+      { x: 520, y: 620, w: 40, h: 40, kind: 'plinth' },
+    ],
     grass: [
       { x: 90, y: 600, w: 290, h: 200, chance: 0.46 },
       { x: 670, y: 600, w: 310, h: 220, chance: 0.46 },
@@ -267,6 +309,7 @@ const ZONE_LIST: ZoneDefinition[] = [
       { id: 'final-boss', x: 540, y: 155, radius: 104, kind: 'boss', label: '无星王座' },
     ],
     ambience: 'stars',
+    terrain: { shape: 'ring', landmark: 'starPad', blurb: '石台围成一圈，中央空着——那是留给最后一盏灯的位置。' },
   },
 ];
 

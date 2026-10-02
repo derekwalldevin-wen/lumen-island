@@ -158,7 +158,9 @@ export interface WorldObstacle {
   y: number;
   w: number;
   h: number;
-  kind: 'tree' | 'rock' | 'ruin' | 'house' | 'forge' | 'lantern' | 'flower' | 'water';
+  // ledge and plinth are landform features, not props: they are solid, but they
+  // exist to describe the shape of the island rather than to furnish it.
+  kind: 'tree' | 'rock' | 'ruin' | 'house' | 'forge' | 'lantern' | 'flower' | 'water' | 'ledge' | 'plinth';
   seed?: number;
 }
 
@@ -201,6 +203,24 @@ export interface ZoneDefinition {
   grass: EncounterPatch[];
   interactables: ZoneInteractable[];
   ambience: string;
+  /** Landform shape and signature landmark. Drives both drawing and layout. */
+  terrain: ZoneTerrain;
+}
+
+/**
+ * Per-island landform. Every zone shares one elliptical plate today, which is
+ * why the five islands read as the same place in five colours. Each shape below
+ * is a distinct silhouette, and `landmark` gives the player something they can
+ * recognise without reading the HUD.
+ */
+export type TerrainShape = 'harbor' | 'terrace' | 'grove' | 'lagoon' | 'ring';
+
+export interface ZoneTerrain {
+  shape: TerrainShape;
+  /** Drawn on the plate and highlighted by the minimap. */
+  landmark: 'lighthouse' | 'stair' | 'paperGrove' | 'pond' | 'starPad';
+  /** Short line describing the landform, used by the guide copy. */
+  blurb: string;
 }
 
 export interface BuildingDefinition {

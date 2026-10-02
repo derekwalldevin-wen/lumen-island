@@ -6,6 +6,7 @@ import type {
   Particle,
   Projectile,
   SaveData,
+  TerrainShape,
   WeaponType,
   WorldObstacle,
   ZoneDefinition,
@@ -932,6 +933,87 @@ function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle, sa
     ctx.restore();
 
     softLight(ctx, x + w * 0.3, y + 8, w * 0.34, 12, '#e0fff0', 0.16);
+  } else if (obstacle.kind === 'ledge') {
+    // Terrace riser. A long box here reads as a wall lying on the grass, so the
+    // face is inset at both ends, the top edge is irregular, and grass spills
+    // over the lip. The ends are drawn narrower than the collision box on
+    // purpose: the hitbox stays exactly where the data says, and the art
+    // tapers into it.
+    const face = h * 1.9;
+    const topY = y - h * 0.5;
+    drawShadow(ctx, x + w / 2, topY + face + 3, w * 0.48, 0.26);
+    const riser = (shrink: number): [number, number][] => {
+      const inset = shrink * 16;
+      const pts: [number, number][] = [];
+      const segs = 9;
+      for (let index = 0; index <= segs; index += 1) {
+        const t = index / segs;
+        const px = x + inset + t * (w - inset * 2);
+        // Irregular crest so it reads as broken stone, not as a milled beam.
+        const crest = topY + (index % 2 === 0 ? -2.5 : 1.5) - Math.sin(t * Math.PI) * 3;
+        pts.push([px, crest]);
+      }
+      pts.push([x + w - inset * 0.6, topY + face]);
+      pts.push([x + w * 0.5, topY + face + 5]);
+      pts.push([x + inset * 0.6, topY + face]);
+      return pts;
+    };
+    pathFill(ctx, riser(0), linear(ctx, x, topY, x, topY + face, '#c3b992', '#38444a'), '#16212f', 2.4);
+    ctx.save();
+    ctx.beginPath();
+    const clip = riser(0);
+    ctx.moveTo(clip[0]![0], clip[0]![1]);
+    for (const [cxp, cyp] of clip) ctx.lineTo(cxp, cyp);
+    ctx.closePath();
+    ctx.clip();
+    // Coursed blocks on the face.
+    ctx.strokeStyle = withAlpha('#2f3a3c', 0.34);
+    ctx.lineWidth = 1.3;
+    for (let row = 1; row < 3; row += 1) {
+      const rowY = topY + (face * row) / 3;
+      ctx.beginPath();
+      ctx.moveTo(x, rowY);
+      ctx.lineTo(x + w, rowY);
+      ctx.stroke();
+      for (let joint = 0; joint < 6; joint += 1) {
+        const jx = x + (w * joint) / 6 + (row % 2 ? w / 12 : 0);
+        ctx.beginPath();
+        ctx.moveTo(jx, rowY);
+        ctx.lineTo(jx + 2, rowY + face / 3);
+        ctx.stroke();
+      }
+    }
+    // Grass spilling over the lip: this is what turns a wall into a terrace.
+    for (let index = 0; index < 16; index += 1) {
+      const gx = x + 10 + ((w - 20) * index) / 15;
+      ellipse(ctx, gx, topY - 1 + (index % 2), 9 + (index % 3) * 4, 4 + (index % 2) * 2, withAlpha(index % 2 ? '#6f9a72' : '#87ab7c', 0.42));
+    }
+    ctx.restore();
+    // Lit top edge, moon side on the left.
+    ctx.strokeStyle = withAlpha('#e6dcb4', 0.55);
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    for (let index = 0; index <= 9; index += 1) {
+      const t = index / 9;
+      const px = x + t * w;
+      const py = topY + (index % 2 === 0 ? -2.5 : 1.5) - Math.sin(t * Math.PI) * 3;
+      if (index === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  } else if (obstacle.kind === 'plinth') {
+    // A low stone block. Reads as a solid the player cannot cross and gives the
+    // ring its shape from a distance.
+    drawShadow(ctx, x + w / 2, y + h - 1, w * 0.62, 0.3);
+    pathFill(ctx, [
+      [x + w * 0.16, y + h * 0.1], [x + w * 0.84, y],
+      [x + w, y + h * 0.62], [x + w * 0.5, y + h], [x, y + h * 0.62],
+    ], linear(ctx, x, y, x + w, y + h, '#cfc8e0', '#4a5068'), '#141c2e', 2.4);
+    pathFill(ctx, [
+      [x + w * 0.16, y + h * 0.1], [x + w * 0.84, y],
+      [x + w * 0.72, y + h * 0.3], [x + w * 0.28, y + h * 0.34],
+    ], withAlpha('#f2ecff', 0.28), withAlpha('#1a2032', 0.4), 1.4);
+    star(ctx, x + w / 2, y + h * 0.46, w * 0.2, withAlpha('#e6d8ff', 0.4), 4, 0);
   } else if (obstacle.kind === 'flower') {
     // A clump of real flowers: each on a leaning stem with a lit crown and a
     // contact shadow, rather than a row of flat discs that read as scattered
@@ -1218,10 +1300,306 @@ function outlinePoint(cx: number, cy: number, rx: number, ry: number, seed: numb
 }
 
 /**
+ * Walking route per landform, in units of the plate's own radii.
+ *
+ * The eight numbers are a cubic bezier: start, two control points, end. Every
+ * landform deliberately takes a different line from the south spawn toward the
+ * north objective, so no two islands can be played by muscle memory.
+ */
+const TRAIL_ROUTES: Record<TerrainShape, readonly number[]> = {
+  // Straight spine, but angled: the harbour is the one readable approach.
+  harbor: [-0.1, 0.88, -0.26, 0.34, 0.2, -0.16, 0.06, -0.86],
+  // Switchbacks climbing the terraces. The control points alternate sign
+  // strongly so the route crosses itself, which is what reads as a climb.
+  terrace: [-0.42, 0.84, 0.52, 0.66, -0.5, 0.34, 0.3, -0.62],
+  // Weaving through the thicket, with a deeper S than the others.
+  grove: [-0.36, 0.86, 0.5, 0.6, -0.48, 0.24, 0.2, -0.84],
+  // Splicing between the pools, entering from the opposite side to the grove so
+  // the two islands never share a spawn-side lean.
+  lagoon: [0.36, 0.86, -0.54, 0.62, 0.5, 0.2, -0.32, -0.8],
+  // Out around the plinth ring, hugging the west side before cutting in.
+  ring: [-0.42, 0.82, -0.56, 0.46, 0.5, 0.06, 0.02, -0.86],
+};
+
+/** Landform furniture drawn on the plate, below props. */
+function drawLandformDetail(
+  ctx: CanvasRenderingContext2D,
+  zone: ZoneDefinition,
+  shape: TerrainShape,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  random: SeededRandom,
+  time: number,
+): void {
+  const stone = withAlpha('#cfc6a4', 0.5);
+  const stoneDark = withAlpha('#3d4a4c', 0.4);
+  switch (shape) {
+    case 'harbor': {
+      // Boardwalk out over the south point, with mooring posts and rope.
+      const pierY = cy + ry * 0.9;
+      const pierW = rx * 0.16;
+      pathFill(ctx, [
+        [cx - pierW, cy + ry * 0.66], [cx + pierW, cy + ry * 0.66],
+        [cx + pierW * 0.86, pierY + ry * 0.2], [cx - pierW * 0.86, pierY + ry * 0.2],
+      ], withAlpha('#6b5b45', 0.72), withAlpha('#2a2118', 0.6), 2);
+      // Plank lines.
+      ctx.strokeStyle = withAlpha('#3a2f22', 0.4);
+      ctx.lineWidth = 1.4;
+      for (let index = 1; index < 7; index += 1) {
+        const t = index / 7;
+        const y = cy + ry * (0.66 + t * 0.44);
+        const halfW = pierW * (1 - t * 0.14);
+        ctx.beginPath();
+        ctx.moveTo(cx - halfW, y);
+        ctx.lineTo(cx + halfW, y);
+        ctx.stroke();
+      }
+      for (const side of [-1, 1]) {
+        const postX = cx + side * pierW * 0.92;
+        ctx.strokeStyle = '#4a3d2c';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(postX, cy + ry * 0.68);
+        ctx.lineTo(postX, cy + ry * 0.98);
+        ctx.stroke();
+        circle(ctx, postX, cy + ry * 0.68, 3.4, '#6b5b45', '#2a2118', 1.4);
+      }
+      // A lantern at the pier head so the dock reads at night.
+      softLight(ctx, cx, cy + ry * 1.06, 66, 46, '#f4c95d', 0.18);
+      drawHangingLantern(ctx, cx, cy + ry * 0.99, 0.4, '#f4c95d', time, 7);
+      break;
+    }
+    case 'terrace': {
+      // Three retaining walls stepping up the island, with grass lips catching
+      // light on the downhill side.
+      for (let index = 0; index < 3; index += 1) {
+        const y = cy + ry * (0.44 - index * 0.34);
+        const halfW = rx * (0.66 - index * 0.1);
+        ctx.strokeStyle = stoneDark;
+        ctx.lineWidth = 9;
+        ctx.beginPath();
+        ctx.moveTo(cx - halfW, y);
+        ctx.quadraticCurveTo(cx, y + 12, cx + halfW, y);
+        ctx.stroke();
+        ctx.strokeStyle = stone;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(cx - halfW, y - 5);
+        ctx.quadraticCurveTo(cx, y + 7, cx + halfW, y - 5);
+        ctx.stroke();
+        // Lit grass lip.
+        ctx.strokeStyle = withAlpha(zone.groundAlt, 0.4);
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.moveTo(cx - halfW * 0.95, y - 11);
+        ctx.quadraticCurveTo(cx, y + 1, cx + halfW * 0.95, y - 11);
+        ctx.stroke();
+      }
+      break;
+    }
+    case 'grove': {
+      // Rows of hanging paper lanterns on a catenary between imaginary trunks.
+      for (let row = 0; row < 3; row += 1) {
+        const y = cy + ry * (0.5 - row * 0.32);
+        const sag = 26 - row * 5;
+        ctx.strokeStyle = withAlpha('#c9b389', 0.28);
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        for (let index = 0; index <= 20; index += 1) {
+          const t = index / 20;
+          const px = cx - rx * 0.74 + t * rx * 1.48;
+          const py = y + Math.sin(t * Math.PI) * sag;
+          if (index === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        for (let index = 1; index < 5; index += 1) {
+          const t = index / 5;
+          const px = cx - rx * 0.74 + t * rx * 1.48;
+          const py = y + Math.sin(t * Math.PI) * sag;
+          softLight(ctx, px, py + 14, 46, 40, '#f2c86e', 0.13);
+          drawHangingLantern(ctx, px, py + 3, 0.3, '#f2c86e', time, row * 2 + index);
+        }
+      }
+      // Leaf litter, which is what makes it read as a wood floor.
+      for (let index = 0; index < 22; index += 1) {
+        const lx = cx + random.range(-rx * 0.8, rx * 0.8);
+        const ly = cy + random.range(-ry * 0.8, ry * 0.8);
+        ellipse(ctx, lx, ly, random.range(6, 13), random.range(3, 6), withAlpha(index % 3 ? '#8a6a3c' : '#a8823f', 0.24));
+      }
+      break;
+    }
+    case 'lagoon': {
+      // Reed clumps and lily shelves in the shallows between the pools.
+      for (let index = 0; index < 26; index += 1) {
+        const rx2 = cx + random.range(-rx * 0.82, rx * 0.82);
+        const ry2 = cy + random.range(-ry * 0.82, ry * 0.82);
+        const sway = Math.sin(time * 0.9 + index) * 2;
+        ctx.strokeStyle = withAlpha(index % 2 ? '#6f9a72' : '#87ab7c', 0.5);
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(rx2, ry2);
+        ctx.quadraticCurveTo(rx2 + sway, ry2 - 12, rx2 + sway * 1.6, ry2 - 22);
+        ctx.stroke();
+        ellipse(ctx, rx2 + sway * 1.6, ry2 - 23, 2.4, 4, withAlpha('#c9d68a', 0.42));
+      }
+      // Standing water sheeting between the pools: this is what tells the player
+      // the whole island is wet, not just the four obstacles.
+      for (let index = 0; index < 5; index += 1) {
+        const wx = cx + random.range(-rx * 0.7, rx * 0.7);
+        const wy = cy + random.range(-ry * 0.7, ry * 0.7);
+        ellipse(ctx, wx, wy, random.range(40, 78), random.range(18, 34), withAlpha('#3f7d84', 0.2));
+        ellipse(ctx, wx, wy - 2, random.range(32, 60), random.range(12, 24), withAlpha('#7cc4c4', 0.14));
+        ctx.strokeStyle = withAlpha('#d8f4ec', 0.16 + Math.sin(time * 1.2 + index) * 0.06);
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.ellipse(wx, wy, random.range(26, 52), random.range(10, 20), 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      break;
+    }
+    case 'ring': {
+      // The plinth ring itself, drawn as inlaid stone, so the shape is visible
+      // even before the player walks between the blocks.
+      const ringY = cy + ry * 0.18;
+      const ringRx = rx * 0.34;
+      const ringRy = ry * 0.3;
+      ctx.strokeStyle = withAlpha('#c9c2dd', 0.24);
+      ctx.lineWidth = 12;
+      ctx.beginPath();
+      ctx.ellipse(cx, ringY, ringRx, ringRy, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = withAlpha('#f2ecff', 0.4);
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.ellipse(cx, ringY, ringRx, ringRy, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // Inlaid star chart inside the ring, slowly turning.
+      ctx.save();
+      ctx.translate(cx, ringY);
+      ctx.rotate(time * 0.06);
+      ctx.strokeStyle = withAlpha('#e0d0f5', 0.3);
+      ctx.lineWidth = 1.4;
+      for (let index = 0; index < 7; index += 1) {
+        const angle = (index / 7) * Math.PI * 2;
+        const px = Math.cos(angle) * ringRx * 0.62;
+        const py = Math.sin(angle) * ringRy * 0.62;
+        star(ctx, px, py, 5, withAlpha('#f0e0ff', 0.5), 4, index);
+      }
+      ctx.strokeStyle = withAlpha('#c9b8e8', 0.22);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let index = 0; index < 7; index += 1) {
+        const angle = (index / 7) * Math.PI * 2;
+        const px = Math.cos(angle) * ringRx * 0.62;
+        const py = Math.sin(angle) * ringRy * 0.62;
+        if (index === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      ctx.restore();
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+/**
+ * Per-island silhouette modulation.
+ *
+ * Every term is >= 1 by construction. That is load bearing, not cosmetic: the
+ * walkable area in WorldRuntime.isWalkable is a plain ellipse, so if a shape
+ * ever pulled the drawn plate inside that ellipse the player could walk off the
+ * visible land and be stranded on empty air. Growing outward is always safe;
+ * pinching inward is never.
+ */
+export function shapeScale(shape: TerrainShape, t: number): number {
+  // Canvas y grows downward, so PI/2 is the south edge (the spawn side).
+  const south = Math.sin(t);
+  const east = Math.cos(t);
+  switch (shape) {
+    case 'harbor': {
+      // A pier reaching south plus squared dock shoulders. The shoulder powers
+      // are 2 and 4: at 3 the (0, 0.5) term cancels the north falloff and the
+      // silhouette turns into a symmetric teardrop, which is not a harbour.
+      // A narrow pier reaching south: the tall power keeps it a spit rather
+      // than a bulge, and squared shoulders either side read as a quay.
+      const pier = Math.max(0, south) ** 10 * 0.3;
+      const shoulder = (Math.max(0, east) ** 2 + Math.max(0, -east) ** 2) * 0.12;
+      return 1 + pier + shoulder;
+    }
+    case 'terrace': {
+      // Stepped east flank: quantised height so the outline reads as stairs.
+      // The ramp is biased north, because the player climbs toward the north gate.
+      const flank = Math.max(0, east + south * 0.3);
+      const steps = Math.round(flank * 5) / 5;
+      return 1 + steps * 0.26 + Math.max(0, -east) ** 4 * 0.1;
+    }
+    case 'grove': {
+      // Evenly lobed canopy mass; more wobble than the rest, but never less.
+      return 1 + (0.5 + 0.5 * Math.sin(t * 4)) * 0.13 + (0.5 + 0.5 * Math.sin(t * 7 + 1.1)) * 0.06;
+    }
+    case 'lagoon': {
+      // Two lobes north and south with a shallow waist between them.
+      const waist = Math.abs(east) * 0.09;
+      return 1 + Math.max(0, -south) ** 2 * 0.14 - waist + 0.09;
+    }
+    case 'ring': {
+      // Deliberately the most circular shape, so the plinth ring inside it
+      // reads as a ring rather than as one more irregular blob. Four lobes give
+      // it just enough character to be told apart from the others.
+      return 1 + (0.5 + 0.5 * Math.cos(t * 4)) * 0.08 + Math.max(0, -south) ** 2 * 0.1;
+    }
+    default:
+      return 1;
+  }
+}
+
+/**
+ * Island outline with the zone's landform applied on top of the organic wobble.
+ * Export-shaped so the minimap draws the same silhouette the world does.
+ */
+export function islandOutline(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  seed: number,
+  wobble: number,
+  shape: TerrainShape,
+  points = 96,
+): void {
+  ctx.beginPath();
+  for (let index = 0; index <= points; index += 1) {
+    const t = (index / points) * Math.PI * 2;
+    const n = outlineScale(seed, wobble, t) * shapeScale(shape, t);
+    const px = cx + Math.cos(t) * rx * n;
+    const py = cy + Math.sin(t) * ry * n;
+    if (index === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+}
+
+/** Samples the drawn silhouette so rim light and shadows follow the real edge. */
+function islandPoint(
+  cx: number, cy: number, rx: number, ry: number, seed: number, wobble: number,
+  shape: TerrainShape, t: number,
+): [number, number] {
+  const n = outlineScale(seed, wobble, t) * shapeScale(shape, t);
+  return [cx + Math.cos(t) * rx * n, cy + Math.sin(t) * ry * n];
+}
+
+/**
  * Floating island mass: drop shadow, exposed rock rim, top plate with internal
  * value variation, then a moon-side rim light so the landform has an edge.
  */
-function drawIslandTerrain(ctx: CanvasRenderingContext2D, zone: ZoneDefinition): void {
+function drawIslandTerrain(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: number): void {
   const cx = zone.width / 2;
   const cy = zone.height / 2;
   const rx = zone.width * 0.475;
@@ -1229,23 +1607,24 @@ function drawIslandTerrain(ctx: CanvasRenderingContext2D, zone: ZoneDefinition):
   const seed = hashString(`island:${zone.id}`);
   const wobble = 0.05;
   const random = new SeededRandom(seed);
+  const shape = zone.terrain.shape;
 
   // Soft cast shadow on the void below.
   ctx.save();
-  organicOutline(ctx, cx + 6, cy + 58, rx * 1.04, ry * 1.02, seed, wobble);
+  islandOutline(ctx, cx + 6, cy + 58, rx * 1.04, ry * 1.02, seed, wobble, shape);
   ctx.fillStyle = 'rgba(5, 13, 24, 0.5)';
   ctx.fill();
   ctx.restore();
 
   // Exposed rock underside peeking out below the grass line.
   ctx.save();
-  organicOutline(ctx, cx, cy + 30, rx * 0.99, ry * 0.985, seed, wobble);
+  islandOutline(ctx, cx, cy + 30, rx * 0.99, ry * 0.985, seed, wobble, shape);
   ctx.fillStyle = linear(ctx, cx, cy - ry * 0.2, cx, cy + ry, '#2b4351', '#101f31');
   ctx.fill();
   // Vertical striations read as strata in the cliff.
   for (let index = 0; index < 26; index += 1) {
     const t = Math.PI + (index / 25) * Math.PI;
-    const [px, py] = outlinePoint(cx, cy + 30, rx * 0.99, ry * 0.985, seed, wobble, t);
+    const [px, py] = islandPoint(cx, cy + 30, rx * 0.99, ry * 0.985, seed, wobble, shape, t);
     const length = 14 + (index % 4) * 9;
     ctx.strokeStyle = withAlpha(index % 2 ? '#486778' : '#0c1826', 0.34);
     ctx.lineWidth = 2 + (index % 3);
@@ -1258,7 +1637,7 @@ function drawIslandTerrain(ctx: CanvasRenderingContext2D, zone: ZoneDefinition):
 
   // Top plate with internal value patches clipped to the silhouette.
   ctx.save();
-  organicOutline(ctx, cx, cy, rx, ry, seed, wobble);
+  islandOutline(ctx, cx, cy, rx, ry, seed, wobble, shape);
   ctx.fillStyle = linear(ctx, cx - rx, cy - ry, cx + rx, cy + ry, zone.groundAlt, zone.ground);
   ctx.fill();
   ctx.clip();
@@ -1309,10 +1688,14 @@ function drawIslandTerrain(ctx: CanvasRenderingContext2D, zone: ZoneDefinition):
   // Worn dirt apron along the walking line. Layered passes of decreasing width
   // and opacity: one uniform 62px stroke reads as a painted stripe, whereas a
   // soft outer band with a tighter brighter core reads as compacted earth.
+  //
+  // The route bends differently per landform, because a shared straight spine
+  // was one of the reasons every island felt the same.
+  const route = TRAIL_ROUTES[shape];
   const trail = () => {
     ctx.beginPath();
-    ctx.moveTo(cx - rx * 0.12, cy + ry * 0.86);
-    ctx.bezierCurveTo(cx - rx * 0.3, cy + ry * 0.3, cx + rx * 0.26, cy - ry * 0.1, cx + rx * 0.1, cy - ry * 0.82);
+    ctx.moveTo(cx + route[0] * rx, cy + route[1] * ry);
+    ctx.bezierCurveTo(cx + route[2] * rx, cy + route[3] * ry, cx + route[4] * rx, cy + route[5] * ry, cx + route[6] * rx, cy + route[7] * ry);
   };
   ctx.save();
   ctx.lineCap = 'round';
@@ -1339,16 +1722,18 @@ function drawIslandTerrain(ctx: CanvasRenderingContext2D, zone: ZoneDefinition):
   for (let index = 0; index < 14; index += 1) {
     const t = index / 13;
     // Walk the same bezier so patches land on the trail rather than beside it.
-    const bx = (1 - t) * (1 - t) * (1 - t) * (cx - rx * 0.12)
-      + 3 * (1 - t) * (1 - t) * t * (cx - rx * 0.3)
-      + 3 * (1 - t) * t * t * (cx + rx * 0.26)
-      + t * t * t * (cx + rx * 0.1);
-    const by = (1 - t) * (1 - t) * (1 - t) * (cy + ry * 0.86)
-      + 3 * (1 - t) * (1 - t) * t * (cy + ry * 0.3)
-      + 3 * (1 - t) * t * t * (cy - ry * 0.1)
-      + t * t * t * (cy - ry * 0.82);
+    const bx = (1 - t) ** 3 * (cx + route[0] * rx)
+      + 3 * (1 - t) ** 2 * t * (cx + route[2] * rx)
+      + 3 * (1 - t) * t * t * (cx + route[4] * rx)
+      + t ** 3 * (cx + route[6] * rx);
+    const by = (1 - t) ** 3 * (cy + route[1] * ry)
+      + 3 * (1 - t) ** 2 * t * (cy + route[3] * ry)
+      + 3 * (1 - t) * t * t * (cy + route[5] * ry)
+      + t ** 3 * (cy + route[7] * ry);
     ellipse(ctx, bx + random.range(-26, 26), by + random.range(-22, 22), random.range(14, 38), random.range(7, 18), withAlpha(index % 2 ? '#c2ab80' : zone.ground, 0.16));
   }
+
+  drawLandformDetail(ctx, zone, shape, cx, cy, rx, ry, random, time);
 
   // Moonlight falls from the upper left, so lift that side and cool the rest.
   const light = ctx.createLinearGradient(cx - rx, cy - ry, cx + rx * 0.6, cy + ry);
@@ -1687,7 +2072,7 @@ export function drawWorldScene(
   ctx.save();
   ctx.translate(-options.camera.x, -options.camera.y);
 
-  drawIslandTerrain(ctx, zone);
+  drawIslandTerrain(ctx, zone, options.time);
   drawGroundTexture(ctx, zone);
   drawGrass(ctx, zone, options.time);
   drawScatterDecor(ctx, zone, options.time);
@@ -1700,14 +2085,24 @@ export function drawWorldScene(
     softLight(ctx, interactable.x, interactable.y + 2, interactable.kind === 'npc' ? 72 : 58, interactable.kind === 'npc' ? 34 : 24, color, interactable.kind === 'boss' ? 0.18 : 0.1);
   }
 
-  // Curving paper path.
+  // Paved paper path following the same route as the dirt apron on the plate, so
+  // the two layers read as one road rather than as two crossing marks.
+  const worldRoute = TRAIL_ROUTES[zone.terrain.shape];
+  const px = zone.width / 2;
+  const py = zone.height / 2;
+  const routePath = () => {
+    ctx.beginPath();
+    ctx.moveTo(px + worldRoute[0]! * zone.width * 0.475, py + worldRoute[1]! * zone.height * 0.475);
+    ctx.bezierCurveTo(
+      px + worldRoute[2]! * zone.width * 0.475, py + worldRoute[3]! * zone.height * 0.475,
+      px + worldRoute[4]! * zone.width * 0.475, py + worldRoute[5]! * zone.height * 0.475,
+      px + worldRoute[6]! * zone.width * 0.475, py + worldRoute[7]! * zone.height * 0.475,
+    );
+  };
   ctx.strokeStyle = linear(ctx, zone.width * 0.45, zone.height, zone.width * 0.5, 60, withAlpha('#c4b487', 0.08), withAlpha('#fff0c2', 0.3));
   ctx.lineWidth = 32;
   ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(zone.width * 0.46, zone.height - 70);
-  ctx.bezierCurveTo(zone.width * 0.27, zone.height * 0.72, zone.width * 0.7, zone.height * 0.5, zone.width * 0.52, zone.height * 0.25);
-  ctx.bezierCurveTo(zone.width * 0.44, zone.height * 0.15, zone.width * 0.53, 120, zone.width * 0.5, 85);
+  routePath();
   ctx.stroke();
   ctx.strokeStyle = withAlpha('#fff0c2', 0.18);
   ctx.lineWidth = 2;
@@ -1774,6 +2169,18 @@ export function drawWorldScene(
 }
 
 /**
+ * Where each island's landmark sits, as a fraction of zone height from the top,
+ * plus how to draw it. The minimap needs one fixed point per island to point at.
+ */
+const LANDMARK_MARKS: Record<'lighthouse' | 'stair' | 'paperGrove' | 'pond' | 'starPad', { y: number; size: number; color: string }> = {
+  lighthouse: { y: 0.09, size: 3.6, color: '#ffe6a8' },
+  stair: { y: 0.14, size: 3.2, color: '#dff0b8' },
+  paperGrove: { y: 0.16, size: 3.4, color: '#f2c86e' },
+  pond: { y: 0.2, size: 3.2, color: '#a8e8e0' },
+  starPad: { y: 0.14, size: 3.8, color: '#e6d0ff' },
+};
+
+/**
  * Compact orientation map for the world HUD. The zones are far larger than the
  * viewport, so without this a player has no spatial sense of where the objective
  * is relative to them, only a distance in pixels.
@@ -1795,10 +2202,12 @@ export function drawMinimap(
   ctx.fillStyle = 'rgba(11, 20, 34, 0.86)';
   ctx.fillRect(0, 0, width, height);
 
-  // Island plate, using the same silhouette family as the world render.
+  // Island plate, using the exact silhouette the world render draws. When the five
+  // islands shared one ellipse the minimap was five identical blobs, which made
+  // it useless for recognising where you are.
   const cx = offsetX + zone.width * scale * 0.5;
   const cy = offsetY + zone.height * scale * 0.5;
-  organicOutline(ctx, cx, cy, zone.width * 0.475 * scale, zone.height * 0.475 * scale, hashString(`island:${zone.id}`), 0.05, 40);
+  islandOutline(ctx, cx, cy, zone.width * 0.475 * scale, zone.height * 0.475 * scale, hashString(`island:${zone.id}`), 0.05, zone.terrain.shape, 56);
   ctx.fillStyle = withAlpha(zone.ground, 0.5);
   ctx.fill();
   ctx.strokeStyle = withAlpha(zone.haze, 0.32);
@@ -1806,8 +2215,43 @@ export function drawMinimap(
   ctx.stroke();
 
   ctx.save();
-  organicOutline(ctx, cx, cy, zone.width * 0.475 * scale, zone.height * 0.475 * scale, hashString(`island:${zone.id}`), 0.05, 40);
+  islandOutline(ctx, cx, cy, zone.width * 0.475 * scale, zone.height * 0.475 * scale, hashString(`island:${zone.id}`), 0.05, zone.terrain.shape, 56);
   ctx.clip();
+
+  // The walking route, drawn from the same bezier the world uses. This is what
+  // turns the minimap from a blob into a map: the player can see where the road
+  // bends before they get there.
+  const route = TRAIL_ROUTES[zone.terrain.shape];
+  const halfW = zone.width * 0.475;
+  const halfH = zone.height * 0.475;
+  ctx.strokeStyle = withAlpha('#f2e6c4', 0.34);
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx + route[0]! * halfW * scale, cy + route[1]! * halfH * scale);
+  ctx.bezierCurveTo(
+    cx + route[2]! * halfW * scale, cy + route[3]! * halfH * scale,
+    cx + route[4]! * halfW * scale, cy + route[5]! * halfH * scale,
+    cx + route[6]! * halfW * scale, cy + route[7]! * halfH * scale,
+  );
+  ctx.stroke();
+
+  // Landform furniture, so each island's map signature is visible at a glance.
+  for (const obstacle of zone.obstacles) {
+    if (obstacle.kind === 'ledge') {
+      const [lx, ly] = toMap(obstacle.x + obstacle.w / 2, obstacle.y + obstacle.h / 2);
+      ctx.strokeStyle = withAlpha('#cfc6a4', 0.5);
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(lx - obstacle.w * 0.5 * scale, ly);
+      ctx.lineTo(lx + obstacle.w * 0.5 * scale, ly);
+      ctx.stroke();
+    }
+    if (obstacle.kind === 'plinth') {
+      const [px2, py2] = toMap(obstacle.x + obstacle.w / 2, obstacle.y + obstacle.h / 2);
+      circle(ctx, px2, py2, 1.8, withAlpha('#d8cff0', 0.8));
+    }
+  }
 
   // Encounter grass reads as a hazard zone rather than decoration.
   for (const patch of zone.grass) {
@@ -1825,6 +2269,11 @@ export function drawMinimap(
     roundRect(ctx, bx - 2.5, by - 2.5, 5, 5, 1, withAlpha('#f4c95d', 0.8));
   }
   ctx.restore();
+
+  // The zone landmark, marked so the player has one fixed thing to navigate by.
+  const landmark = LANDMARK_MARKS[zone.terrain.landmark];
+  const [lx2, ly2] = toMap(zone.width / 2, zone.height * landmark.y);
+  star(ctx, lx2, ly2, landmark.size, withAlpha(landmark.color, 0.85), 4, 0.3);
 
   // Interactables: gates and portals get a distinct ring so travel points read.
   for (const interactable of zone.interactables) {
