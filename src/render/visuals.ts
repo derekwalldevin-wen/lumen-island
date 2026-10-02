@@ -13,6 +13,7 @@ import type {
   ZoneInteractable,
 } from '../types';
 import { hashString, SeededRandom } from '../core/rng';
+import { paintBrushStrokes, paintGroundMottle, staticLayer } from './layers';
 import { drawSprite, fitSprite, loadSprite, type SpriteId } from './sprites';
 import type { WorldRuntime } from '../world/worldRuntime';
 
@@ -53,6 +54,8 @@ interface WorldVisualOptions {
   reducedMotion: boolean;
   /** Screen-space guidance marker produced by the onboarding layer. */
   guide: GuideVisual | null;
+  /** Backing store pixel ratio, so baked layers match the live canvas. */
+  dpr: number;
 }
 
 interface BattleVisualOptions {
@@ -1153,8 +1156,66 @@ function drawGrass(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: nu
   }
 }
 
+/**
+ * Ground surface detail. This used to be 190 speckles plus faint vertical
+ * streaks, which was not enough to stop the plate reading as flat colour under
+ * the painted character art. Because it is now baked once it can afford real
+ * material: low frequency noise for large scale mottling, directional brush
+ * strokes for the hand painted feel, then the original speckle on top.
+ */
 function drawGroundTexture(ctx: CanvasRenderingContext2D, zone: ZoneDefinition): void {
-  const random = new SeededRandom(hashString(zone.id));
+  const seed = hashString(zone.id);
+  const noiseRandom = new SeededRandom(seed);
+  const cx = zone.width / 2;
+  const cy = zone.height / 2;
+  const rx = zone.width * 0.475;
+  const ry = zone.height * 0.475;
+
+  ctx.save();
+  islandOutline(ctx, cx, cy, rx, ry, seed, 0.05, zone.terrain.shape, 96);
+  ctx.clip();
+
+  // Large scale mottling. Drawn as overlapping discs rather than a value-noise
+  // grid: per-cell fills at these alphas stack into a visible square lattice
+  // across the plate, which looked worse than the flat colour it replaced.
+  paintGroundMottle(
+    ctx,
+    (mx, my, mrx, mry, fill) => ellipse(ctx, mx, my, mrx, mry, fill),
+    { x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2 },
+    () => noiseRandom.next(),
+    {
+      count: 70,
+      minRadius: 48,
+      maxRadius: 150,
+      colors: [zone.haze, zone.ground, zone.groundAlt],
+      minAlpha: 0.05,
+      maxAlpha: 0.12,
+    },
+  );
+
+  // Directional strokes following the same moonlight as the lighting pass, so the
+  // surface texture and the light agree. Low alpha and soft-edged: at full
+  // strength these read as scratches rather than as a painted surface.
+  paintBrushStrokes(ctx, cx - rx, cy - ry, rx * 2, ry * 2, () => noiseRandom.next(), {
+    count: 300,
+    angle: -0.42,
+    spread: 0.6,
+    color: zone.groundAlt,
+    alpha: 0.07,
+    minLength: 10,
+    maxLength: 34,
+  });
+  paintBrushStrokes(ctx, cx - rx, cy - ry, rx * 2, ry * 2, () => noiseRandom.next(), {
+    count: 180,
+    angle: 2.6,
+    spread: 0.8,
+    color: '#16232f',
+    alpha: 0.06,
+    minLength: 8,
+    maxLength: 22,
+  });
+
+  const random = new SeededRandom(seed);
   for (let index = 0; index < 190; index += 1) {
     const x = random.range(40, zone.width - 40);
     const y = random.range(50, zone.height - 40);
@@ -1169,6 +1230,18 @@ function drawGroundTexture(ctx: CanvasRenderingContext2D, zone: ZoneDefinition):
       ctx.stroke();
     }
   }
+
+  // Pebbles with a lit cap and a contact shadow. Cheap once baked, and they give
+  // the eye something with a real edge to measure the island against.
+  for (let index = 0; index < 60; index += 1) {
+    const px = random.range(cx - rx * 0.9, cx + rx * 0.9);
+    const py = random.range(cy - ry * 0.9, cy + ry * 0.9);
+    const size = random.range(2.4, 6.5);
+    ellipse(ctx, px, py + size * 0.4, size * 1.1, size * 0.36, withAlpha('#13212c', 0.24));
+    ellipse(ctx, px, py, size, size * 0.62, linear(ctx, px - size, py - size * 0.6, px + size, py + size * 0.5, '#93a09a', '#4b5a5e'));
+    ellipse(ctx, px - size * 0.28, py - size * 0.2, size * 0.48, size * 0.26, withAlpha('#e2ebdf', 0.45));
+  }
+
   ctx.strokeStyle = withAlpha('#f5edcf', 0.08);
   ctx.lineWidth = 2;
   for (let x = 90; x < zone.width; x += 120) {
@@ -1177,6 +1250,7 @@ function drawGroundTexture(ctx: CanvasRenderingContext2D, zone: ZoneDefinition):
     ctx.quadraticCurveTo(x + 35, zone.height * 0.45, x - 15, zone.height - 30);
     ctx.stroke();
   }
+  ctx.restore();
 }
 
 function drawScatterDecor(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: number): void {
@@ -1767,19 +1841,23 @@ function drawIslandTerrain(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, 
   ctx.restore();
 }
 
-function drawIslandFringe(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: number): void {
+/**
+ * Grass overhanging the island edge. Baked rather than animated: the sway was
+ * under two pixels at this camera distance, so paying a path per blade per frame
+ * bought nothing visible.
+ */
+function drawIslandFringe(ctx: CanvasRenderingContext2D, zone: ZoneDefinition): void {
   const random = new SeededRandom(hashString(`fringe:${zone.id}`));
   for (let index = 0; index < 24; index += 1) {
     const x = zone.width * 0.1 + random.range(0, zone.width * 0.8);
     const y = zone.height * 0.5 + Math.sqrt(Math.max(0, 1 - Math.pow((x - zone.width / 2) / (zone.width * 0.45), 2))) * zone.height * 0.44;
-    const sway = Math.sin(time * 0.7 + index) * 2;
     ctx.strokeStyle = withAlpha('#294c4e', 0.8);
     ctx.lineWidth = 1.6;
     ctx.beginPath();
     ctx.moveTo(x, y + 7);
-    ctx.quadraticCurveTo(x + sway, y + 17, x - 1, y + 25);
+    ctx.quadraticCurveTo(x, y + 17, x - 1, y + 25);
     ctx.stroke();
-    ellipse(ctx, x - 2 + sway * 0.4, y + 16, 4, 2, withAlpha('#5b8b6e', 0.75));
+    ellipse(ctx, x - 2, y + 16, 4, 2, withAlpha('#5b8b6e', 0.75));
   }
 }
 
@@ -1891,7 +1969,35 @@ function drawZoneProps(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time
   }
 }
 
-function drawSky(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: number, reducedMotion: boolean): void {
+/**
+ * Sky, split so the parts that never change can be baked.
+ *
+ * The gradient, moon, moon shafts, star field, islets and horizon bounce depend
+ * only on the zone. Clouds drift, stars twinkle and rain falls, so those stay
+ * live. The static half was roughly 200 of the 3000 calls the frame used to
+ * make and none of it changed between frames.
+ */
+function drawSky(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: number, reducedMotion: boolean, dpr: number): void {
+  const baked = staticLayer(`sky:${zone.id}`, {
+    zoneId: zone.id,
+    dpr,
+    // The sky is a soft gradient plus small stars and blitted behind
+    // everything, so it does not need full device resolution.
+    maxDpr: 1.5,
+    scale: Math.max(BASE_WIDTH, BASE_HEIGHT),
+    draw: (layerCtx) => {
+      drawSkyStatic(layerCtx, zone);
+    },
+  });
+  if (baked) {
+    ctx.drawImage(baked.canvas, -baked.padding, -baked.padding, BASE_WIDTH + baked.padding * 2, BASE_HEIGHT + baked.padding * 2);
+  } else {
+    drawSkyStatic(ctx, zone);
+  }
+  drawSkyLive(ctx, zone, time, reducedMotion);
+}
+
+function drawSkyStatic(ctx: CanvasRenderingContext2D, zone: ZoneDefinition): void {
   const gradient = ctx.createLinearGradient(0, 0, 0, BASE_HEIGHT);
   gradient.addColorStop(0, zone.background);
   gradient.addColorStop(0.38, withAlpha(zone.haze, 0.34));
@@ -1926,8 +2032,81 @@ function drawSky(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: numb
   ctx.fillRect(moonX - 30, moonY - 30, 60, 60);
   ctx.restore();
 
+  const random = new SeededRandom(hashString(`sky:${zone.id}`));
+
+  // A denser diagonal band reads as depth far better than a uniform scatter,
+  // and it puts the moon inside a sky rather than above an empty field. Baked:
+  // the band never moves, only the twinkle overlay does, which stays live.
+  for (let index = 0; index < 90; index += 1) {
+    const t = random.next();
+    const bandX = t * (BASE_WIDTH + 300) - 150;
+    const bandY = 60 + t * 210 + random.range(-46, 46);
+    if (bandX < -10 || bandX > BASE_WIDTH + 10 || bandY < 0 || bandY > BASE_HEIGHT) continue;
+    circle(ctx, bandX, bandY, random.range(0.6, 1.5), withAlpha('#fff2c7', random.range(0.12, 0.4)));
+  }
+
+  // Star positions and sizes are seeded, so they are baked. Live twinkle is a
+  // cheap additive dot drawn on top rather than a full redraw of the field.
+  const starField: Array<{ x: number; y: number; size: number; bright: boolean; alpha: number }> = [];
+  for (let index = 0; index < 48; index += 1) {
+    starField.push({
+      x: random.range(0, BASE_WIDTH),
+      y: random.range(0, BASE_HEIGHT),
+      size: random.range(0.8, 2.8),
+      bright: index % 6 === 0,
+      alpha: random.range(0.2, 0.72),
+    });
+  }
+  for (const point of starField) {
+    circle(ctx, point.x, point.y, point.bright ? point.size * 1.7 : point.size, withAlpha(point.bright ? zone.accent : '#fff2c7', point.alpha * 0.82));
+    if (point.bright) {
+      star(ctx, point.x, point.y, point.size * 1.5, withAlpha(zone.accent, 0.32), 4, 0);
+      ctx.strokeStyle = withAlpha('#fff6d8', 0.28);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(point.x - point.size * 2.6, point.y);
+      ctx.lineTo(point.x + point.size * 2.6, point.y);
+      ctx.moveTo(point.x, point.y - point.size * 2.6);
+      ctx.lineTo(point.x, point.y + point.size * 2.6);
+      ctx.stroke();
+    }
+  }
+
+  // Distant sibling islets: parallax silhouettes that place the player inside an
+  // archipelago instead of a single disc floating in a void.
+  const islets = new SeededRandom(hashString(`islets:${zone.id}`));
+  for (let index = 0; index < 5; index += 1) {
+    const depth = index / 4;
+    const x = 26 + index * 106;
+    const y = 236 + islets.range(0, 118);
+    const rx = islets.range(15, 30) * (1.15 - depth * 0.35);
+    const ry = rx * 0.42;
+    // Atmospheric perspective: further islets sit closer to the sky value.
+    const tone = mixHex(zone.background, zone.haze, 0.16 + depth * 0.2);
+    ellipse(ctx, x, y + rx * 0.5, rx * 1.04, rx * 0.6, withAlpha('#050d19', 0.34));
+    ellipse(ctx, x, y, rx, ry, withAlpha(tone, 0.66));
+    ellipse(ctx, x, y - ry * 0.34, rx * 0.52, ry * 0.42, withAlpha(zone.ground, 0.22));
+    if (index % 2 === 0) {
+      softLight(ctx, x, y - ry * 0.3, rx * 0.7, ry * 0.8, zone.accent, 0.16);
+      ellipse(ctx, x, y - ry * 0.5, rx * 0.2, rx * 0.24, withAlpha('#f4c95d', 0.7));
+    }
+  }
+
+  // Warm bounce along the lower horizon, where the island lantern light would
+  // spill onto the cloud sea below.
+  const horizon = ctx.createLinearGradient(0, BASE_HEIGHT * 0.6, 0, BASE_HEIGHT);
+  horizon.addColorStop(0, withAlpha(zone.accent, 0));
+  horizon.addColorStop(1, withAlpha(zone.accent, 0.16));
+  ctx.fillStyle = horizon;
+  ctx.fillRect(0, BASE_HEIGHT * 0.6, BASE_WIDTH, BASE_HEIGHT * 0.4);
+}
+
+/** Clouds, twinkle, moon shaft shimmer and rain: the parts of the sky that move. */
+function drawSkyLive(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: number, reducedMotion: boolean): void {
   // Moon shafts, additive and very low alpha: they suggest volume in the air
   // rather than drawing literal beams across the scene.
+  const moonX = 372;
+  const moonY = 132;
   ctx.save();
   ctx.globalCompositeOperation = 'screen';
   for (let index = 0; index < 4; index += 1) {
@@ -1949,69 +2128,22 @@ function drawSky(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time: numb
   }
   ctx.restore();
 
-  const random = new SeededRandom(hashString(`sky:${zone.id}`));
-
-  // A denser diagonal band reads as depth far better than a uniform scatter,
-  // and it puts the moon inside a sky rather than above an empty field.
-  for (let index = 0; index < 90; index += 1) {
-    const t = random.next();
-    const bandX = t * (BASE_WIDTH + 300) - 150;
-    const bandY = 60 + t * 210 + random.range(-46, 46);
-    if (bandX < -10 || bandX > BASE_WIDTH + 10 || bandY < 0 || bandY > BASE_HEIGHT) continue;
-    const bandDrift = reducedMotion ? 0 : Math.sin(time * 0.08 + index) * 5;
-    circle(ctx, bandX + bandDrift, bandY, random.range(0.6, 1.5), withAlpha('#fff2c7', random.range(0.12, 0.4)));
-  }
-
+  // Twinkle: a small additive dot per star instead of redrawing the field.
+  const twinkleRandom = new SeededRandom(hashString(`sky:${zone.id}`));
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
   for (let index = 0; index < 48; index += 1) {
-    const x = random.range(0, BASE_WIDTH);
-    const y = random.range(0, BASE_HEIGHT);
-    const drift = reducedMotion ? 0 : Math.sin(time * 0.08 + index) * 8;
-    const size = random.range(0.8, 2.8);
-    const isStar = index % 6 === 0;
-    // A gentle twinkle keeps the field alive instead of pasted on.
-    const twinkle = reducedMotion ? 1 : 0.72 + (Math.sin(time * 1.1 + index * 1.7) + 1) * 0.14;
-    circle(ctx, x + drift, y, isStar ? size * 1.7 : size, withAlpha(isStar ? zone.accent : '#fff2c7', random.range(0.2, 0.72) * twinkle));
-    if (isStar) {
-      star(ctx, x + drift, y, size * 1.5, withAlpha(zone.accent, 0.32), 4, time * 0.15 + index);
-      // Diffraction cross on the brightest stars only, so it stays a highlight.
-      ctx.strokeStyle = withAlpha('#fff6d8', 0.34 * twinkle);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x + drift - size * 2.6, y);
-      ctx.lineTo(x + drift + size * 2.6, y);
-      ctx.moveTo(x + drift, y - size * 2.6);
-      ctx.lineTo(x + drift, y + size * 2.6);
-      ctx.stroke();
-    }
+    twinkleRandom.next();
+    twinkleRandom.next();
+    twinkleRandom.next();
+    const x = twinkleRandom.range(0, BASE_WIDTH);
+    const y = twinkleRandom.range(0, BASE_HEIGHT);
+    const pulse = Math.sin(time * 1.1 + index * 1.7);
+    if (pulse < 0.4) continue;
+    const size = index % 6 === 0 ? 2.4 : 1.2;
+    circle(ctx, x, y, size, withAlpha(index % 6 === 0 ? zone.accent : '#fff6d8', (pulse - 0.4) * 0.22));
   }
-
-  // Distant sibling islets: parallax silhouettes that place the player inside an
-  // archipelago instead of a single disc floating in a void.
-  const islets = new SeededRandom(hashString(`islets:${zone.id}`));
-  for (let index = 0; index < 5; index += 1) {
-    const depth = index / 4;
-    const x = 26 + index * 106 + (reducedMotion ? 0 : Math.sin(time * 0.03 + index * 2.1) * 5 * (0.4 + depth));
-    const y = 236 + islets.range(0, 118);
-    const rx = islets.range(15, 30) * (1.15 - depth * 0.35);
-    const ry = rx * 0.42;
-    // Atmospheric perspective: further islets sit closer to the sky value.
-    const tone = mixHex(zone.background, zone.haze, 0.16 + depth * 0.2);
-    ellipse(ctx, x, y + rx * 0.5, rx * 1.04, rx * 0.6, withAlpha('#050d19', 0.34));
-    ellipse(ctx, x, y, rx, ry, withAlpha(tone, 0.66));
-    ellipse(ctx, x, y - ry * 0.34, rx * 0.52, ry * 0.42, withAlpha(zone.ground, 0.22));
-    if (index % 2 === 0) {
-      softLight(ctx, x, y - ry * 0.3, rx * 0.7, ry * 0.8, zone.accent, 0.16);
-      drawHangingLantern(ctx, x, y - ry * 0.5, 0.2, zone.accent, time, index);
-    }
-  }
-
-  // Warm bounce along the lower horizon, where the island lantern light would
-  // spill onto the cloud sea below.
-  const horizon = ctx.createLinearGradient(0, BASE_HEIGHT * 0.6, 0, BASE_HEIGHT);
-  horizon.addColorStop(0, withAlpha(zone.accent, 0));
-  horizon.addColorStop(1, withAlpha(zone.accent, 0.16));
-  ctx.fillStyle = horizon;
-  ctx.fillRect(0, BASE_HEIGHT * 0.6, BASE_WIDTH, BASE_HEIGHT * 0.4);
+  ctx.restore();
 
   for (let layer = 0; layer < 3; layer += 1) {
     const y = 100 + layer * 290 + (reducedMotion ? 0 : Math.sin(time * 0.06 + layer) * 9);
@@ -2068,15 +2200,68 @@ export function drawWorldScene(
   options: WorldVisualOptions,
 ): void {
   const zone = world.currentZone;
-  drawSky(ctx, zone, options.time, options.reducedMotion);
+  drawSky(ctx, zone, options.time, options.reducedMotion, options.dpr);
   ctx.save();
   ctx.translate(-options.camera.x, -options.camera.y);
 
-  drawIslandTerrain(ctx, zone, options.time);
-  drawGroundTexture(ctx, zone);
+  /**
+   * The island, its ground, the decor and the overhanging fringe are all
+   * functions of the zone alone. They used to be redrawn every frame at roughly
+   * 3000 canvas calls total; baked once they cost one drawImage, and the detail
+   * budget inside them stops being a per-frame cost.
+   *
+   * The cache is sized to the zone rather than the viewport, because the camera
+   * translates inside it and the camera moves during play. Grass, props and
+   * anything else that animates stays live.
+   */
+  // The plate is the zone ellipse scaled by shapeScale, which can exceed 1, so
+  // the silhouette reaches past the zone rectangle. The padding is the largest
+  // overshoot this landform can produce, or the baked edges would be clipped.
+  let overshoot = 0;
+  for (let degrees = 0; degrees < 360; degrees += 1) {
+    const t = (degrees * Math.PI) / 180;
+    overshoot = Math.max(overshoot, shapeScale(zone.terrain.shape, t) - 1);
+  }
+  const padding = Math.ceil(overshoot * Math.max(zone.width, zone.height) * 0.5) + 24;
+  const layerSize = Math.max(zone.width, zone.height);
+  const layer = staticLayer(`island:${zone.id}`, {
+    zoneId: zone.id,
+    dpr: options.dpr,
+    scale: layerSize,
+    width: zone.width,
+    height: zone.height,
+    padding,
+    draw: (layerCtx) => {
+      // staticLayer already translated by the padding; centre the square region
+      // inside the non-square zone so the blit below is a plain offset.
+      layerCtx.translate((zone.width - layerSize) / 2, (zone.height - layerSize) / 2);
+      drawIslandTerrain(layerCtx, zone, 0);
+      drawGroundTexture(layerCtx, zone);
+      drawScatterDecor(layerCtx, zone, 0);
+      drawIslandFringe(layerCtx, zone);
+    },
+  });
+  if (layer) {
+    // drawImage with an explicit destination size absorbs whatever backing
+    // resolution the cache chose, so the pixel budget never shows as blur from
+    // a mismatched scale.
+    ctx.drawImage(
+      layer.canvas,
+      -layer.padding + (zone.width - layerSize) / 2,
+      -layer.padding + (zone.height - layerSize) / 2,
+      layerSize + layer.padding * 2,
+      layerSize + layer.padding * 2,
+    );
+  } else {
+    // Cache unavailable (zero sized canvas or a failed render): draw live rather
+    // than show a bare island.
+    drawIslandTerrain(ctx, zone, 0);
+    drawGroundTexture(ctx, zone);
+    drawScatterDecor(ctx, zone, 0);
+    drawIslandFringe(ctx, zone);
+  }
+
   drawGrass(ctx, zone, options.time);
-  drawScatterDecor(ctx, zone, options.time);
-  drawIslandFringe(ctx, zone, options.time);
   drawZoneProps(ctx, zone, options.time);
 
   // Soft pools of light around interactable locations add depth to the playfield.
@@ -2357,9 +2542,9 @@ function drawGuideBeacon(ctx: CanvasRenderingContext2D, guide: GuideVisual, time
   ctx.restore();
 }
 
-export function drawTitleScene(ctx: CanvasRenderingContext2D, time: number, reducedMotion: boolean): void {
+export function drawTitleScene(ctx: CanvasRenderingContext2D, time: number, reducedMotion: boolean, dpr = 1): void {
   const zone = ZONES.harbor;
-  drawSky(ctx, zone, time, reducedMotion);
+  drawSky(ctx, zone, time, reducedMotion, dpr);
 
   // Distant sibling islands add parallax depth behind the stage.
   const far = new SeededRandom(31337);

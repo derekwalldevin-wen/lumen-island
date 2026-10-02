@@ -86,7 +86,10 @@ function countOf(ctx: CanvasRenderingContext2D): number {
 }
 
 function baseOptions() {
-  return { time: 3.25, reducedMotion: false };
+  // dpr feeds the static layer cache. Under the test recorder there is no
+  // document.createElement, so staticLayer returns null and the scene falls
+  // back to drawing live, which is exactly the path these tests need to cover.
+  return { time: 3.25, reducedMotion: false, dpr: 1 };
 }
 
 describe('render smoke tests', () => {

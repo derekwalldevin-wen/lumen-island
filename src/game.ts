@@ -245,7 +245,7 @@ export class Game {
     this.ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * offsetX, dpr * offsetY);
     this.ctx.clearRect(0, 0, BASE_WIDTH, BASE_HEIGHT);
     if (this.mode === 'title') {
-      drawTitleScene(this.ctx, this.time, this.save.settings.reducedMotion);
+      drawTitleScene(this.ctx, this.time, this.save.settings.reducedMotion, dpr);
     } else if (this.mode === 'world') {
       this.updateCamera();
       this.guide = resolveGuide(this.save, this.world.currentZone.id, this.world.x, this.world.y);
@@ -255,6 +255,7 @@ export class Game {
         camera: this.camera,
         nearbyId: this.world.getNearbyInteractable()?.id ?? null,
         reducedMotion: this.save.settings.reducedMotion,
+        dpr,
         guide: marker
           ? {
             x: marker.x,
