@@ -8,6 +8,9 @@ export class InputController {
   private joystickPointer: number | null = null;
   private joystickOrigin = { x: 0, y: 0 };
   private joystickVector: Vec2 = { x: 0, y: 0 };
+  /** Idle position of the stick, captured on the first plant and reused after. */
+  private joystickHomeSet = false;
+  private joystickParkTimer: ReturnType<typeof setTimeout> | null = null;
   private enabled = false;
   private attackHeld = false;
 
@@ -120,9 +123,13 @@ export class InputController {
 
   private bindJoystick(): void {
     const joystick = this.root.querySelector<HTMLElement>('#joystick');
+    const moveZone = this.root.querySelector<HTMLElement>('#touch-move-zone');
     if (!joystick) return;
     const knob = joystick.querySelector<HTMLElement>('.joystick__knob');
     const radius = 48;
+    /** Where the stick rests when idle, captured from its laid-out position. */
+    let homeLeft = 0;
+    let homeTop = 0;
 
     const update = (event: PointerEvent) => {
       const dx = event.clientX - this.joystickOrigin.x;
@@ -136,21 +143,58 @@ export class InputController {
       if (knob) knob.style.transform = `translate(${x * radius}px, ${y * radius}px)`;
     };
 
+    const park = () => {
+      joystick.style.left = '';
+      joystick.style.top = '';
+      joystick.style.position = '';
+      joystick.classList.remove('is-planted');
+    };
+
     const reset = () => {
       this.joystickPointer = null;
       this.joystickVector = { x: 0, y: 0 };
       if (knob) knob.style.transform = 'translate(0, 0)';
+      // Held for a beat before returning, so the player can see where they
+      // released instead of having the stick vanish mid-correction.
+      if (this.joystickParkTimer !== null) clearTimeout(this.joystickParkTimer);
+      this.joystickParkTimer = setTimeout(park, 420);
     };
 
-    const pointerdown = (event: PointerEvent) => {
+    const plant = (event: PointerEvent) => {
       if (!this.enabled) return;
       event.preventDefault();
+      // Capture the home position on first use: reading it during pointerdown
+      // would read a stick the player has already nudged.
+      if (!this.joystickHomeSet) {
+        const rect = joystick.getBoundingClientRect();
+        homeLeft = rect.left;
+        homeTop = rect.top;
+        this.joystickHomeSet = true;
+      }
+      // Switch to absolute placement before measuring. Leaving it `relative` made
+      // left/top offsets from its static slot, which compounded on every re-plant:
+      // the second tap landed 25px off and the third 90px off. And measuring
+      // first, then switching, put the very first tap 44px out because absolute
+      // takes the stick out of flow and moves it.
+      joystick.classList.add('is-planted');
+      joystick.style.position = 'absolute';
       const rect = joystick.getBoundingClientRect();
-      this.joystickOrigin = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      const host = joystick.offsetParent as HTMLElement | null;
+      const hostRect = host?.getBoundingClientRect();
+      joystick.style.left = `${event.clientX - (hostRect ? hostRect.left : 0) - rect.width / 2}px`;
+      joystick.style.top = `${event.clientY - (hostRect ? hostRect.top : 0) - rect.height / 2}px`;
+      joystick.classList.remove('is-planted');
+      this.joystickOrigin = { x: event.clientX, y: event.clientY };
       this.joystickPointer = event.pointerId;
-      joystick.setPointerCapture(event.pointerId);
+      const target = moveZone ?? joystick;
+      target.setPointerCapture(event.pointerId);
+      if (this.joystickParkTimer !== null) {
+        clearTimeout(this.joystickParkTimer);
+        this.joystickParkTimer = null;
+      }
       update(event);
     };
+
     const pointermove = (event: PointerEvent) => {
       if (event.pointerId !== this.joystickPointer) return;
       event.preventDefault();
@@ -161,14 +205,28 @@ export class InputController {
       reset();
     };
 
-    joystick.addEventListener('pointerdown', pointerdown);
+    // The zone claims the whole quadrant; the stick itself also accepts a touch
+    // so it stays usable if the zone is ever absent, such as under test.
+    const surface = moveZone ?? joystick;
+    surface.addEventListener('pointerdown', plant);
+    surface.addEventListener('pointermove', pointermove, { passive: false });
+    surface.addEventListener('pointerup', pointerup);
+    surface.addEventListener('pointercancel', pointerup);
+    joystick.addEventListener('pointerdown', plant);
     joystick.addEventListener('pointermove', pointermove, { passive: false });
     joystick.addEventListener('pointerup', pointerup);
     joystick.addEventListener('pointercancel', pointerup);
-    this.disposers.push(() => joystick.removeEventListener('pointerdown', pointerdown));
-    this.disposers.push(() => joystick.removeEventListener('pointermove', pointermove));
-    this.disposers.push(() => joystick.removeEventListener('pointerup', pointerup));
-    this.disposers.push(() => joystick.removeEventListener('pointercancel', pointerup));
+    this.disposers.push(() => {
+      surface.removeEventListener('pointerdown', plant);
+      surface.removeEventListener('pointermove', pointermove);
+      surface.removeEventListener('pointerup', pointerup);
+      surface.removeEventListener('pointercancel', pointerup);
+      joystick.removeEventListener('pointerdown', plant);
+      joystick.removeEventListener('pointermove', pointermove);
+      joystick.removeEventListener('pointerup', pointerup);
+      joystick.removeEventListener('pointercancel', pointerup);
+      if (this.joystickParkTimer !== null) clearTimeout(this.joystickParkTimer);
+    });
   }
 
   private consumeKey(code: string): boolean {

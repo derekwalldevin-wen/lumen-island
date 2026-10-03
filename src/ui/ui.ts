@@ -394,7 +394,8 @@ export class UIController {
         </div>
 
         <div id="touch-controls" class="touch-controls" aria-label="触控操作">
-          <div id="joystick" class="joystick" aria-label="移动摇杆"><div class="joystick__ring"></div><div class="joystick__knob"></div></div>
+          <div id="touch-move-zone" class="touch-move-zone" aria-hidden="true"></div>
+      <div id="joystick" class="joystick" aria-label="移动摇杆"><div class="joystick__ring"></div><div class="joystick__knob"></div></div>
           <div class="touch-actions">
             <button id="touch-interact" class="touch-button touch-button--interact" data-command="interact" aria-label="互动">话</button>
             <button class="touch-button touch-button--small" data-command="potion" aria-label="使用药剂">药</button>

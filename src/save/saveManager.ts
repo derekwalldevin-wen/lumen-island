@@ -1,9 +1,17 @@
-import { SAVE_VERSION } from '../data';
+import { BUILDINGS, MATERIALS, SAVE_VERSION, WEAPONS, ZONES } from '../data';
 import { createInitialSave } from '../rules/gameRules';
-import type { SaveData } from '../types';
+import type { BuildingId, SaveData, ZoneId } from '../types';
 
 const SAVE_KEY = 'lumen-island-quest:save:v1';
 const BACKUP_KEY = 'lumen-island-quest:save:v1:backup';
+
+const VALID_ZONES = new Set<string>(Object.keys(ZONES));
+const VALID_MATERIALS = new Set<string>(Object.keys(MATERIALS));
+const VALID_WEAPONS = new Set<string>(WEAPONS.map((weapon) => weapon.id));
+/** Building id to the number of levels it actually defines. */
+const BUILDING_MAX_LEVEL = new Map<string, number>(
+  BUILDINGS.map((building) => [building.id, building.levels.length]),
+);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -15,6 +23,32 @@ function numberOr(value: unknown, fallback: number): number {
 
 function stringOr(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value : fallback;
+}
+
+/**
+ * Validated string membership.
+ *
+ * The loader used to cast these straight through with `as ZoneId`, which pushed
+ * the burden onto every consumer: a save naming an island that no longer exists
+ * reached `ZONES[zoneId].safe` and threw on the first frame after loading. A
+ * save is untrusted input, so membership is checked where it is read.
+ */
+function oneOf<T extends string>(value: unknown, allowed: Set<string>, fallback: T): T {
+  return typeof value === 'string' && allowed.has(value) ? (value as T) : fallback;
+}
+
+/**
+ * A level within what the building actually defines.
+ *
+ * `building.levels[current]` is read to price the next upgrade. An out of range
+ * value makes that lookup undefined and the build panel dereferences it, so the
+ * level is clamped here rather than trusted.
+ */
+function levelOr(value: unknown, buildingId: string): number {
+  const max = BUILDING_MAX_LEVEL.get(buildingId) ?? 0;
+  const raw = Math.floor(numberOr(value, 0));
+  if (raw < 0) return 0;
+  return Math.min(raw, max);
 }
 
 export function normaliseSave(value: unknown, now = Date.now()): SaveData | null {
@@ -42,7 +76,7 @@ export function normaliseSave(value: unknown, now = Date.now()): SaveData | null
     inventory: Array.isArray(rawPlayer.inventory)
       ? rawPlayer.inventory.filter((item): item is string => typeof item === 'string')
       : base.player.inventory,
-    equippedWeapon: stringOr(rawPlayer.equippedWeapon, base.player.equippedWeapon) as SaveData['player']['equippedWeapon'],
+    equippedWeapon: oneOf(rawPlayer.equippedWeapon, VALID_WEAPONS, base.player.equippedWeapon),
     equippedCharm: typeof rawPlayer.equippedCharm === 'string'
       ? rawPlayer.equippedCharm as SaveData['player']['equippedCharm']
       : null,
@@ -52,7 +86,10 @@ export function normaliseSave(value: unknown, now = Date.now()): SaveData | null
   };
 
   for (const material of Object.keys(base.player.materials) as Array<keyof SaveData['player']['materials']>) {
-    player.materials[material] = Math.max(0, Math.floor(numberOr(rawMaterials[material], 0)));
+    // read from the base list, not the raw list, so a material the game dropped
+    // cannot reappear in the save it just loaded.
+    const stored = VALID_MATERIALS.has(material) ? rawMaterials[material] : undefined;
+    player.materials[material] = Math.max(0, Math.floor(numberOr(stored, 0)));
   }
 
   const discoveredZones = Array.isArray(rawWorld.discoveredZones)
@@ -68,13 +105,21 @@ export function normaliseSave(value: unknown, now = Date.now()): SaveData | null
   const defeatCounts = isRecord(rawWorld.defeatCounts)
     ? Object.fromEntries(Object.entries(rawWorld.defeatCounts).map(([id, count]) => [id, Math.max(0, Math.floor(numberOr(count, 0)))]))
     : {};
-  const buildings = isRecord(rawWorld.buildings)
-    ? { ...(rawWorld.buildings as SaveData['world']['buildings']) }
-    : {};
+  // Built up from the known building list rather than spread from the raw
+  // object: a spread keeps unknown ids, and the build panel iterates its own
+  // definitions, so those entries would be dead weight that round-trips forever.
+  const buildings: SaveData['world']['buildings'] = { forge: 0, cottage: 0, rainCanopy: 0, starChart: 0, beacon: 0 };
+  if (isRecord(rawWorld.buildings)) {
+    for (const buildingId of Object.keys(buildings) as BuildingId[]) {
+      if (rawWorld.buildings[buildingId] !== undefined) {
+        buildings[buildingId] = levelOr(rawWorld.buildings[buildingId], buildingId);
+      }
+    }
+  }
 
   const world = {
     ...base.world,
-    currentZone: stringOr(rawWorld.currentZone, 'harbor') as SaveData['world']['currentZone'],
+    currentZone: oneOf(rawWorld.currentZone, VALID_ZONES, 'harbor' as ZoneId),
     x: numberOr(rawWorld.x, base.world.x),
     y: numberOr(rawWorld.y, base.world.y),
     questStage: Math.min(9, Math.max(0, Math.floor(numberOr(rawWorld.questStage, 0)))),

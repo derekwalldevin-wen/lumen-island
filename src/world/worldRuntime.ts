@@ -24,6 +24,11 @@ export class WorldRuntime {
     this.currentZone = ZONES[save.world.currentZone] ?? ZONES.harbor;
     this.x = save.world.x;
     this.y = save.world.y;
+    // A loaded position can be off-island or inside a rock: a save from a build
+    // with different zone dimensions, a truncated write, or a hand edit. Snap on
+    // construction rather than only on zone entry, or the first frame after
+    // loading draws the hero standing on nothing.
+    this.snapToWalkable();
   }
 
   /**
