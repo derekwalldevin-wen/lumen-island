@@ -1,4 +1,4 @@
-import { ZONES } from '../data';
+import { WEAPONS, ZONES } from '../data';
 import { SeededRandom } from '../core/rng';
 import type { SaveData, Vec2, WorldObstacle, ZoneDefinition, ZoneInteractable } from '../types';
 
@@ -24,6 +24,20 @@ export class WorldRuntime {
     this.currentZone = ZONES[save.world.currentZone] ?? ZONES.harbor;
     this.x = save.world.x;
     this.y = save.world.y;
+  }
+
+  /**
+   * Strength of the hero's lantern, 0 to 1.
+   *
+   * Derived from the equipped weapon rather than tracked separately: the flame
+   * level is the single piece of state that already means "how much light does
+   * this character carry", and duplicating it here would let the two drift.
+   */
+  get flameGlow(): number {
+    const weapon = WEAPONS.find((entry) => entry.id === this.save.player.equippedWeapon);
+    if (!weapon) return 0;
+    const flame = weapon.id === 'sprigFork' ? 26 : weapon.tier * 22 + 8;
+    return Math.max(0, Math.min(1, (flame - 20) / 60));
   }
 
   update(move: Vec2, delta: number, speed: number, random: SeededRandom, canEncounter: boolean): WorldUpdateEvents {

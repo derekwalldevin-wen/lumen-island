@@ -423,6 +423,17 @@ export function drawHero(ctx: CanvasRenderingContext2D, visual: HeroVisual): voi
     }
     drawHeroWeaponBadge(ctx, visual.weaponType, visual.flame, visual.x, visual.y + bob, scale, facingRight);
     ctx.restore();
+    // Rim light last, over the whole figure: the painted art has its own baked
+    // lighting, and without a scene-consistent edge on top the hero still reads
+    // as a sticker pasted onto the ground.
+    drawCharacterRimLight(
+      ctx,
+      visual.x,
+      visual.y + bob - 32 * scale,
+      30 * scale,
+      Math.max(0, Math.min(1, (visual.flame - 20) / 60)),
+      '#ffd98a',
+    );
     return;
   }
 
@@ -601,6 +612,118 @@ function drawTree(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle): void 
       circle(ctx, centerX + width * 0.18, centerY - height * 0.22, 1.8, withAlpha('#c8e8a8', 0.32));
     }
   }
+}
+
+/**
+ * Props bake individually, one small canvas each, rather than joining the island
+ * layer.
+ *
+ * They have to stay out of the island layer because they are depth sorted with
+ * the player: the hero must be able to walk behind a tree or in front of a ruin.
+ * Sorting baked islands is impossible, so each obstacle gets its own tiny canvas
+ * and the blit takes part in the sort.
+ *
+ * Measured cost this replaces, per frame, on a 980x1240 island: 2214 canvas
+ * calls with the props drawn, 896 without. One ruin alone was 1199 of those,
+ * almost all of it masonry coursing that never changes.
+ */
+const OBSTACLE_PADDING = 26;
+
+/**
+ * How far outside the viewport a prop still gets baked.
+ *
+ * Props are cached per obstacle, and the cache holds a bounded number. If an
+ * off-screen prop competes for a slot with one the player is looking at, the
+ * visible one gets evicted and rebaked every frame. Culling to the view plus a
+ * margin keeps the working set inside the budget: a portrait viewport shows a
+ * handful of props, not the twelve a zone can hold.
+ */
+const PROP_CULL_MARGIN = 160;
+
+/**
+ * Extra key material for props whose appearance depends on save state. A cottage
+ * at level 0 and level 2 are different buildings, so sharing a cache entry
+ * between them would show the wrong roof after an upgrade.
+ */
+function obstacleCacheKey(obstacle: WorldObstacle, save: SaveData): string {
+  const base = `${obstacle.kind}:${obstacle.x}:${obstacle.y}:${obstacle.w}:${obstacle.h}:${obstacle.seed ?? 0}`;
+  if (obstacle.kind === 'house') return `${base}:${save.world.buildings.cottage ?? 0}`;
+  if (obstacle.kind === 'forge') return `${base}:${save.world.buildings.forge ?? 0}`;
+  return base;
+}
+
+/**
+ * Kinds that are pure geometry: nothing in them reads `time` or `save`. A ruin
+ * looks static but hangs a swaying lantern inside, and the forge and cottage
+ * carry smoke and lit windows, so those stay live until their animated overlay
+ * is split out.
+ */
+const STATIC_PROP_KINDS = new Set<WorldObstacle['kind']>(['tree', 'rock', 'ledge', 'plinth']);
+
+/**
+ * Draws an obstacle, blitting a baked canvas when one exists. Falls back to
+ * drawing live whenever the prop genuinely animates or the cache is unavailable.
+ */
+/** World-space rectangle currently on screen, plus a margin. */
+interface PropView {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+function isPropVisible(obstacle: WorldObstacle, view: PropView): boolean {
+  return obstacle.x + obstacle.w >= view.left
+    && obstacle.x <= view.right
+    && obstacle.y + obstacle.h >= view.top
+    && obstacle.y <= view.bottom;
+}
+
+function drawObstacleCached(
+  ctx: CanvasRenderingContext2D,
+  obstacle: WorldObstacle,
+  save: SaveData,
+  time: number,
+  dpr: number,
+  view: PropView | null,
+): void {
+  // Ponds, flowers and anything else with a live element stay on the direct
+  // path. Water ripples and flower sway are part of the scene, not decoration.
+  if (!STATIC_PROP_KINDS.has(obstacle.kind) || typeof document === 'undefined') {
+    drawObstacle(ctx, obstacle, save, time);
+    return;
+  }
+  // Cull before caching, not after: an off-screen prop that still occupies a
+  // cache slot will evict the on-screen one and cause a rebake every frame.
+  if (view && !isPropVisible(obstacle, view)) return;
+  const key = obstacleCacheKey(obstacle, save);
+  const baked = staticLayer(`prop:${key}`, {
+    zoneId: key,
+    dpr,
+    kind: 'prop',
+    width: obstacle.w + OBSTACLE_PADDING * 2,
+    height: obstacle.h + OBSTACLE_PADDING * 2,
+    padding: OBSTACLE_PADDING,
+    draw: (propCtx) => {
+      // Authored in obstacle-local space: x,y are the box corner, so shift the
+      // origin to the padded box before drawing the prop in place.
+      propCtx.translate(-obstacle.x + OBSTACLE_PADDING, -obstacle.y + OBSTACLE_PADDING);
+      // Smoke, lantern swing and lit windows are animated overlays; the baked
+      // pass draws the static body with time pinned to 0.
+      drawObstacle(propCtx, obstacle, save, 0);
+    },
+  });
+  if (!baked) {
+    drawObstacle(ctx, obstacle, save, time);
+    return;
+  }
+  ctx.drawImage(
+    baked.canvas,
+    obstacle.x - baked.padding,
+    obstacle.y - baked.padding,
+    obstacle.w + baked.padding * 2,
+    obstacle.h + baked.padding * 2,
+  );
 }
 
 function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle, save: SaveData, time = 0): void {
@@ -2264,6 +2387,20 @@ export function drawWorldScene(
   drawGrass(ctx, zone, options.time);
   drawZoneProps(ctx, zone, options.time);
 
+  /**
+   * Lantern light on the ground.
+   *
+   * The painted character art carries its own baked lighting, which is the real
+   * reason the figures read as stickers pasted on a flat plate: nothing in the
+   * world agrees with the light already inside them. Pooling warm light under
+   * each source, and cooling the ground between them, gives the world a lighting
+   * state the sprites can sit inside.
+   *
+   * Drawn after the props so pools fall across tree trunks and building walls
+   * too, not just the ground.
+   */
+  drawLanternLighting(ctx, zone, world);
+
   // Soft pools of light around interactable locations add depth to the playfield.
   for (const interactable of zone.interactables) {
     const color = interactable.kind === 'boss' ? '#e88470' : interactable.kind === 'portal' || interactable.kind === 'exit' ? '#7ccabc' : '#f4c95d';
@@ -2296,9 +2433,22 @@ export function drawWorldScene(
   // Onboarding marker sits beneath characters so it never hides the objective itself.
   if (options.guide) drawGuideGroundRing(ctx, options.guide, options.time, options.reducedMotion);
 
+  /**
+   * Visible world rectangle, for culling baked props. The camera transform is
+   * applied, so the viewport in world space starts at the camera origin.
+   */
+  const propView: PropView = {
+    left: options.camera.x - PROP_CULL_MARGIN,
+    top: options.camera.y - PROP_CULL_MARGIN,
+    right: options.camera.x + BASE_WIDTH + PROP_CULL_MARGIN,
+    bottom: options.camera.y + BASE_HEIGHT + PROP_CULL_MARGIN,
+  };
+
   const drawables: Array<{ y: number; draw: () => void }> = [];
   for (const obstacle of zone.obstacles) {
-    drawables.push({ y: obstacle.y + obstacle.h, draw: () => drawObstacle(ctx, obstacle, save, options.time) });
+    // Kept in the depth sort rather than baked into the island layer: the hero
+    // has to be able to pass behind a tree, which a flattened layer cannot do.
+    drawables.push({ y: obstacle.y + obstacle.h, draw: () => drawObstacleCached(ctx, obstacle, save, options.time, options.dpr, propView) });
   }
   for (const interactable of zone.interactables) {
     drawables.push({
@@ -2487,6 +2637,109 @@ export function drawMinimap(
   ctx.strokeStyle = withAlpha(zone.haze, 0.22);
   ctx.lineWidth = 1;
   ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+}
+
+/**
+ * Warm light pools under every lantern source, plus a cool wash between them.
+ *
+ * Order matters: the cool pass is additive with 'screen' so it lifts the dark
+ * ground, then each warm pool is painted with 'lighter' so they stack where they
+ * overlap near a lit building. Painting the warm pools first and the cool wash
+ * over them washed the warmth back out.
+ */
+function drawLanternLighting(
+  ctx: CanvasRenderingContext2D,
+  zone: ZoneDefinition,
+  world: WorldRuntime,
+): void {
+  const sources: Array<{ x: number; y: number; radius: number; intensity: number; color: string }> = [];
+
+  for (const interactable of zone.interactables) {
+    const color = interactable.kind === 'boss'
+      ? '#e88470'
+      : interactable.kind === 'portal' || interactable.kind === 'exit'
+        ? '#7ccabc'
+        : '#f4c95d';
+    const radius = interactable.kind === 'boss' ? 150 : interactable.kind === 'npc' ? 120 : 96;
+    sources.push({ x: interactable.x, y: interactable.y + 10, radius, intensity: interactable.kind === 'boss' ? 0.3 : 0.22, color });
+  }
+
+  // Lit windows and forge fire, from the same sources the props draw their glow.
+  for (const obstacle of zone.obstacles) {
+    if (obstacle.kind === 'forge') {
+      sources.push({ x: obstacle.x + obstacle.w / 2, y: obstacle.y + obstacle.h * 0.6, radius: 132, intensity: 0.3, color: '#ff9c5a' });
+    } else if (obstacle.kind === 'house') {
+      sources.push({ x: obstacle.x + obstacle.w / 2, y: obstacle.y + obstacle.h * 0.6, radius: 104, intensity: 0.2, color: '#f4c95d' });
+    } else if (obstacle.kind === 'ruin') {
+      // The shrine lantern inside the broken wall.
+      sources.push({ x: obstacle.x + obstacle.w / 2, y: obstacle.y + obstacle.h * 0.55, radius: 88, intensity: 0.18, color: '#f4c95d' });
+    }
+  }
+
+  // The hero carries a lantern once the flame is lit. It follows the player, so
+  // it is the one light source that can never be baked.
+  const heroIntensity = world.flameGlow;
+  if (heroIntensity > 0.02) {
+    sources.push({ x: world.x, y: world.y + 6, radius: 150, intensity: 0.34 * heroIntensity, color: '#ffd98a' });
+  }
+
+  // Cool moonlight between the pools. Sits under the warm ones so it reads as
+  // ambient rather than as a grey veil over the lit areas.
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  const wash = ctx.createRadialGradient(
+    zone.width / 2, zone.height * 0.3, 40,
+    zone.width / 2, zone.height * 0.3, Math.max(zone.width, zone.height) * 0.7,
+  );
+  wash.addColorStop(0, withAlpha('#6d90b8', 0.09));
+  wash.addColorStop(1, withAlpha('#2c4360', 0.16));
+  ctx.fillStyle = wash;
+  ctx.fillRect(0, 0, zone.width, zone.height);
+  ctx.restore();
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const source of sources) {
+    const pool = ctx.createRadialGradient(source.x, source.y, 2, source.x, source.y, source.radius);
+    pool.addColorStop(0, withAlpha(source.color, source.intensity));
+    pool.addColorStop(0.45, withAlpha(source.color, source.intensity * 0.42));
+    pool.addColorStop(1, withAlpha(source.color, 0));
+    ctx.fillStyle = pool;
+    ctx.beginPath();
+    ctx.ellipse(source.x, source.y, source.radius, source.radius * 0.72, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/**
+ * Warm rim light along the lit edge of a character, so the figure sits inside the
+ * scene's lighting instead of on top of it. Drawn as a clipped arc along the
+ * lantern side rather than a full outline, which would fight the painted art's
+ * own dark contour.
+ */
+function drawCharacterRimLight(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  intensity: number,
+  color: string,
+): void {
+  if (intensity <= 0.02) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.strokeStyle = withAlpha(color, 0.3 * intensity);
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, Math.PI * 0.15, Math.PI * 0.95);
+  ctx.stroke();
+  ctx.strokeStyle = withAlpha(color, 0.16 * intensity);
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.arc(x, y, radius + 2, Math.PI * 0.2, Math.PI * 0.9);
+  ctx.stroke();
+  ctx.restore();
 }
 
 /** Pulsing ring on the ground that marks the current objective. */

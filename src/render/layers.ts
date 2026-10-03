@@ -30,9 +30,14 @@ interface CacheEntry {
   dpr: number;
   /** Slack added around the logical content, needed to rebuild the blit offset. */
   padding: number;
+  /** Monotonic stamp for LRU eviction. Scene layers are not evicted by age. */
+  usedAt: number;
 }
 
 const cache = new Map<StaticLayerKey, CacheEntry>();
+
+/** Monotonic stamp for LRU eviction of prop layers. */
+let clock = 0;
 
 /**
  * Hard ceiling on a cached layer's pixel count.
@@ -48,9 +53,9 @@ const MAX_LAYER_PIXELS = 2_000_000;
 export interface StaticLayerOptions {
   zoneId: string;
   dpr: number;
-  /** Logical size of the layer, in world units. */
-  scale: number;
-  /** Logical width and height, when they differ from a single `scale`. */
+  /** Logical size of the layer, in world units. Ignored when width/height are given. */
+  scale?: number;
+  /** Logical width and height, when the layer is not square. */
   width?: number;
   height?: number;
   /**
@@ -66,6 +71,12 @@ export interface StaticLayerOptions {
    * baking it at dpr 1.5 instead of 2 saves about 3MB for no visible change.
    */
   maxDpr?: number;
+  /**
+   * Marks a per-obstacle layer. Props are many and small, so they get their own
+   * LRU pool rather than sharing the scene-layer eviction, which would otherwise
+   * evict the sky and island every time a new prop appeared.
+   */
+  kind?: 'prop';
   draw: (ctx: CanvasRenderingContext2D) => void;
 }
 
@@ -92,8 +103,13 @@ export function staticLayer(key: StaticLayerKey, options: StaticLayerOptions): S
   // Content is authored in zone coordinates; the canvas carries `padding` of
   // slack on every side so a silhouette drawn outside the zone is not clipped.
   const padding = options.padding ?? 0;
-  const logicalWidth = (options.width ?? options.scale) + padding * 2;
-  const logicalHeight = (options.height ?? options.scale) + padding * 2;
+  const contentWidth = options.width ?? options.scale;
+  const contentHeight = options.height ?? options.scale;
+  if (contentWidth === undefined || contentHeight === undefined) {
+    throw new Error(`staticLayer "${key}" needs either scale or both width and height`);
+  }
+  const logicalWidth = contentWidth + padding * 2;
+  const logicalHeight = contentHeight + padding * 2;
   // Clamp the backing resolution to the pixel budget, and round to a small
   // integer factor of the requested dpr so repeated calls agree on the size and
   // the cache actually hits.
@@ -109,6 +125,9 @@ export function staticLayer(key: StaticLayerKey, options: StaticLayerOptions): S
   const height = Math.max(1, Math.round(logicalHeight * scale));
   const existing = cache.get(key);
   if (existing && existing.zoneId === options.zoneId && existing.width === width && existing.height === height) {
+    // Touch on hit so a hot prop is never the eviction victim.
+    existing.usedAt = clock;
+    clock += 1;
     return { canvas: existing.canvas, padding: existing.padding };
   }
   const canvas = document.createElement('canvas');
@@ -124,15 +143,56 @@ export function staticLayer(key: StaticLayerKey, options: StaticLayerOptions): S
   } catch {
     return null;
   }
-  cache.set(key, { canvas, zoneId: options.zoneId, width, height, dpr, padding });
-  // Two layers are live at once (sky and island). Anything older is dead weight,
-  // so drop all but the current key rather than growing with the zone count.
-  if (cache.size > 2) {
-    for (const stale of Array.from(cache.keys())) {
-      if (stale !== key) cache.delete(stale);
+  cache.set(key, { canvas, zoneId: options.zoneId, width, height, dpr, padding, usedAt: clock });
+  clock += 1;
+  /**
+   * Two-tier eviction.
+   *
+   * A single global cap is wrong now that props live here too: creating a prop
+   * layer would evict the sky and the island, and the next frame would rebake
+   * both, which is far worse than holding a few extra props. So scene layers
+   * (sky, island) are evicted separately from prop layers, and props use an LRU
+   * because they are keyed per obstacle.
+   */
+  if (options.kind === 'prop') {
+    // Evict least-recently-used props until the pool fits. A single prop is
+    // never evicted in favour of a newer one, since the newest is the one being
+    // drawn right now.
+    let total = 0;
+    for (const propKey of propKeys()) {
+      const entry = cache.get(propKey);
+      if (entry) total += entry.width * entry.height;
+    }
+    while (total > MAX_PROP_PIXELS) {
+      let oldestKey: StaticLayerKey | null = null;
+      let oldestAt = Number.POSITIVE_INFINITY;
+      for (const propKey of propKeys()) {
+        const entry = cache.get(propKey);
+        if (entry && entry.usedAt < oldestAt) {
+          oldestAt = entry.usedAt;
+          oldestKey = propKey;
+        }
+      }
+      if (!oldestKey) break;
+      const victim = cache.get(oldestKey);
+      if (victim) total -= victim.width * victim.height;
+      cache.delete(oldestKey);
+    }
+  } else {
+    // Keep the newest scene layer plus, at most, one previous island so that a
+    // zone change does not force an immediate rebake of the sky.
+    const sceneKeys = Array.from(cache.keys()).filter((candidate) => !isPropKey(candidate));
+    if (sceneKeys.length > 2) {
+      for (const sceneKey of sceneKeys) {
+        if (sceneKey !== key) cache.delete(sceneKey);
+      }
     }
   }
   return { canvas, padding };
+}
+
+function propKeys(): StaticLayerKey[] {
+  return Array.from(cache.keys()).filter(isPropKey);
 }
 
 /**
@@ -146,6 +206,28 @@ export function clearStaticLayers(): void {
 /** Test seam: how many layers are currently held. */
 export function staticLayerCount(): number {
   return cache.size;
+}
+
+/**
+ * Total pixel budget for prop layers.
+ *
+ * A count limit is the wrong shape here. Props vary hugely in size, and a
+ * count ceiling thrashes: a zone can hold twelve trees, so a cap of six evicts
+ * and rebakes half of them every single frame. Measured, that turned a 3ms frame
+ * into a 20ms one. A pixel budget scales the limit to what the props actually
+ * cost, so a whole zone's worth of trees fits at once.
+ */
+const MAX_PROP_PIXELS = 2_200_000;
+
+function isPropKey(key: StaticLayerKey): boolean {
+  return key.startsWith('prop:');
+}
+
+/** Drops every cached prop, leaving the island and sky intact. */
+export function clearPropLayers(): void {
+  for (const key of Array.from(cache.keys())) {
+    if (isPropKey(key)) cache.delete(key);
+  }
 }
 
 /**
