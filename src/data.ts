@@ -260,6 +260,11 @@ const ZONE_LIST: ZoneDefinition[] = [
     // the island reads as a water garden rather than a field with a pond on it.
     obstacles: [
       tree(150, 330, 13), tree(760, 280, 16),
+      // Two trees in a 1020x1280 water garden left the pools marooned. These
+      // sit in the gaps between pools so the routes stay walkable while the
+      // island stops reading as five puddles on bare ground.
+      tree(250, 560, 21), tree(860, 480, 22), tree(330, 180, 20),
+      tree(620, 1150, 21), tree(230, 1030, 20), tree(880, 880, 22),
       { x: 420, y: 360, w: 160, h: 115, kind: 'water' },
       { x: 160, y: 750, w: 120, h: 100, kind: 'ruin' },
       { x: 700, y: 860, w: 120, h: 100, kind: 'ruin' },
@@ -290,6 +295,13 @@ const ZONE_LIST: ZoneDefinition[] = [
     // through a corridor rather than straight up the middle.
     obstacles: [
       tree(180, 360, 21), tree(820, 300, 22),
+      // The night island had two trees in a 1080x1320 zone, so the middle of it
+      // read as an empty plate with a ring on it. Spires ring the walking space
+      // and leave the plinth circle and the trail through the middle clear.
+      tree(140, 480, 24), tree(250, 980, 22), tree(260, 1150, 25),
+      tree(330, 250, 23), tree(620, 200, 22), tree(900, 520, 24),
+      tree(950, 820, 21), tree(700, 1180, 23), tree(420, 1220, 22),
+      tree(790, 1120, 24),
       { x: 450, y: 430, w: 180, h: 110, kind: 'ruin' },
       { x: 190, y: 820, w: 130, h: 105, kind: 'ruin' },
       { x: 760, y: 900, w: 130, h: 105, kind: 'ruin' },

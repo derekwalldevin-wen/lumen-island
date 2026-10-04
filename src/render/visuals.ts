@@ -540,77 +540,144 @@ function drawLuma(ctx: CanvasRenderingContext2D, x: number, y: number, time: num
   ctx.restore();
 }
 
-function drawTree(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle): void {
+/**
+ * A tree, built from leaf clusters rather than stacked cones.
+ *
+ * The previous version drew three or four big lobes on a trunk, which against
+ * the painted character art read as a placeholder shape. Foliage only looks
+ * painted when it is made of many small overlapping clusters with gaps between
+ * them, so the light shows through and the crown has a ragged edge.
+ *
+ * This is affordable because trees are baked per obstacle: the cluster count is
+ * a one-time cost, not a per-frame one.
+ */
+function drawTree(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle, zoneId = ''): void {
   const x = obstacle.x + obstacle.w / 2;
   const y = obstacle.y + obstacle.h;
   const seed = obstacle.seed ?? hashString(`${obstacle.x}:${obstacle.y}`);
   const random = new SeededRandom(seed);
-  // Per-tree personality so a grove does not read as one stamp repeated.
-  const lean = random.range(-7, 7);
-  const layers = 3 + (random.next() > 0.62 ? 1 : 0);
-  const hueShift = random.range(-0.06, 0.06);
-  const palette = [
-    mixHex('#2b4b52', hueShift > 0 ? '#2f5a52' : '#27414f', Math.abs(hueShift) * 8),
-    mixHex('#3f6b62', hueShift > 0 ? '#4a7a63' : '#375c60', Math.abs(hueShift) * 8),
-    mixHex('#5a8a72', hueShift > 0 ? '#6b9a74' : '#4f7a70', Math.abs(hueShift) * 8),
-  ];
+  const lean = random.range(-6, 6);
+  // Three growth habits, so a grove is a species rather than one stamp repeated.
+  const habit = zoneId === 'starfall' ? 'spire' : random.next() < 0.34 ? 'broad' : 'tall';
+  const hueShift = random.range(-0.05, 0.05);
+  // Foliage takes its colour from the island it grows on. A fixed green put
+  // meadow trees on the night island, where they read as props wheeled in from
+  // another zone rather than as something that lives there.
+  const zone = zoneId in ZONES ? ZONES[zoneId as keyof typeof ZONES] : undefined;
+  const foliageBase = zone ? mixHex('#2f5a52', zone.ground, 0.34) : '#2f5a52';
+  const foliageLit = zone ? mixHex('#7fb98a', zone.accent, zone.id === 'starfall' ? 0.42 : 0.18) : '#7fb98a';
+  const shift = (hex: string) => mixHex(hex, foliageBase, 0.55 + Math.abs(hueShift) * 4);
 
-  drawShadow(ctx, x + lean * 0.3, y - 2, obstacle.w * 0.54, 0.32);
-  softLight(ctx, x, y - 40, obstacle.w * 0.8, obstacle.h * 0.8, '#b9e0c0', 0.09);
+  const trunkHeight = habit === 'spire' ? 52 : habit === 'broad' ? 30 : 44;
+  const canopyR = habit === 'broad' ? obstacle.w * 0.82 : habit === 'spire' ? obstacle.w * 0.46 : obstacle.w * 0.62;
+  const canopyCy = y - trunkHeight - canopyR * (habit === 'broad' ? 0.42 : 0.62);
 
-  // Trunk leans, with a root flare and two bare branches for silhouette interest.
-  const trunkHeight = 44;
-  pathFill(ctx, [
-    [x - 9, y],
-    [x - 6, y - trunkHeight],
-    [x + 6, y - trunkHeight],
-    [x + 9, y],
-  ], linear(ctx, x - 9, y - trunkHeight, x + 9, y, '#3f4a43', '#75674f'), '#0f1c2e', 3);
-  drawSurfaceTexture(ctx, x - 7, y - trunkHeight + 2, 14, trunkHeight - 4, '#d4c08d', seed, 'wood');
-  ctx.strokeStyle = '#4a5148';
-  ctx.lineWidth = 3.4;
-  ctx.lineCap = 'round';
+  drawShadow(ctx, x + lean * 0.3, y - 2, obstacle.w * 0.5, 0.34);
+  softLight(ctx, x, canopyCy, canopyR * 1.5, canopyR * 1.4, '#bfe6c4', 0.07);
+
+  // Trunk with a root flare, tapering into the crown rather than stopping at it.
+  const halfTop = habit === 'spire' ? 3 : 5;
+  const halfBase = habit === 'broad' ? 12 : 9;
   ctx.beginPath();
-  ctx.moveTo(x + lean * 0.4, y - trunkHeight + 6);
-  ctx.quadraticCurveTo(x + lean * 0.7, y - trunkHeight - 8, x + lean, y - trunkHeight - 15);
-  ctx.stroke();
+  ctx.moveTo(x - halfBase - 5, y);
+  ctx.quadraticCurveTo(x - halfBase * 0.7, y - trunkHeight * 0.45, x - halfTop, y - trunkHeight);
+  ctx.lineTo(x + halfTop, y - trunkHeight);
+  ctx.quadraticCurveTo(x + halfBase * 0.7, y - trunkHeight * 0.45, x + halfBase + 5, y);
+  ctx.closePath();
+  ctx.fillStyle = linear(ctx, x - halfBase, y - trunkHeight, x + halfBase, y, '#39423d', '#7d6d52');
+  ctx.fill();
+  ctx.strokeStyle = '#101a24';
   ctx.lineWidth = 2.4;
-  ctx.beginPath();
-  ctx.moveTo(x + lean * 0.3, y - trunkHeight + 15);
-  ctx.quadraticCurveTo(x + lean * 0.4 - 7, y - trunkHeight + 8, x + lean * 0.4 - 11, y - trunkHeight + 3);
   ctx.stroke();
-
-  for (let layer = 0; layer < layers; layer += 1) {
-    const width = obstacle.w * (0.46 - layer * 0.055);
-    const height = 28 + layer * 7;
-    const centerX = x + lean * (0.5 + layer * 0.22) + random.range(-4, 4);
-    const centerY = y - 48 - layer * 17;
-    const base = palette[layer % palette.length]!;
-    const leaf = linear(ctx, centerX - width / 2, centerY - height, centerX + width / 2, centerY + height, '#7eb28a', base, '#2c4c56');
-    // Canopy shape varies per layer so the crown is lumpy, not a stacked cone.
-    const jitter = (slot: number) => random.range(-width * 0.07, width * 0.07);
-    pathFill(ctx, [
-      [centerX - width / 2, centerY + height * 0.2],
-      [centerX - width * 0.34, centerY - height * 0.28 + jitter(1)],
-      [centerX - width * 0.08, centerY - height * 0.55 + jitter(2)],
-      [centerX + width * 0.3, centerY - height * 0.3 + jitter(3)],
-      [centerX + width / 2, centerY + height * 0.24 + jitter(4)],
-      [centerX + width * 0.12, centerY + height * 0.46],
-      [centerX - width * 0.22, centerY + height * 0.4],
-    ], leaf, '#0f1c2e', 3);
-
-    // Moon-side highlight on the upper-left of each canopy lobe.
-    ctx.strokeStyle = withAlpha('#d8f0c0', 0.34);
-    ctx.lineWidth = 1.6;
+  // Bark grooves along the trunk, lit on the moon side.
+  for (let index = 0; index < 5; index += 1) {
+    const t = index / 4;
+    const gx = x - halfBase * (1 - t) + halfTop * t;
+    ctx.strokeStyle = index % 2 ? withAlpha('#2b332f', 0.4) : withAlpha('#b8a483', 0.28);
+    ctx.lineWidth = 1.2;
     ctx.beginPath();
-    ctx.moveTo(centerX - width * 0.32, centerY - height * 0.1);
-    ctx.quadraticCurveTo(centerX - width * 0.2, centerY - height * 0.34, centerX - width * 0.02, centerY - height * 0.44);
+    ctx.moveTo(gx, y - 4 - t * trunkHeight * 0.9);
+    ctx.lineTo(gx + random.range(-1.4, 1.4), y - trunkHeight * (0.1 + t * 0.8));
     ctx.stroke();
-    // A couple of leaf specks catch the light.
-    if (layer > 0) {
-      circle(ctx, centerX - width * 0.26, centerY - height * 0.16, 2.2, withAlpha('#c8e8a8', 0.42));
-      circle(ctx, centerX + width * 0.18, centerY - height * 0.22, 1.8, withAlpha('#c8e8a8', 0.32));
+  }
+  // Branches reaching up into the crown. Drawn before the canopy so the crown
+  // covers their ends, which is what makes it look like one tree.
+  const branchCount = habit === 'broad' ? 4 : 3;
+  for (let index = 0; index < branchCount; index += 1) {
+    const side = index % 2 === 0 ? 1 : -1;
+    const spread = (0.4 + (index / branchCount) * 0.7) * canopyR;
+    ctx.strokeStyle = '#4a4a41';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 2.6 - index * 0.3;
+    ctx.beginPath();
+    ctx.moveTo(x + lean * 0.3, y - trunkHeight + 4);
+    ctx.quadraticCurveTo(x + side * spread * 0.5, y - trunkHeight - spread * 0.4, x + side * spread, y - trunkHeight - spread * 0.85);
+    ctx.stroke();
+  }
+
+  // Canopy: three value passes, dark mass first, then mid, then moon-lit.
+  const cluster = (cr: number, color: string, count: number, spreadX: number, spreadY: number, seedOffset: number) => {
+    const r2 = new SeededRandom(seed + seedOffset);
+    for (let index = 0; index < count; index += 1) {
+      const angle = r2.next() * Math.PI * 2;
+      const dist = Math.sqrt(r2.next());
+      const px = x + lean + Math.cos(angle) * dist * spreadX;
+      const py = canopyCy + Math.sin(angle) * dist * spreadY;
+      const scale = r2.range(0.5, 1);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      // Each cluster is a small irregular blob, never a circle.
+      const points = 7;
+      for (let p = 0; p <= points; p += 1) {
+        const a = (p / points) * Math.PI * 2;
+        const rr = cr * scale * (0.76 + 0.32 * Math.sin(a * 3 + index));
+        const cxp = px + Math.cos(a) * rr;
+        const cyp = py + Math.sin(a) * rr * 0.86;
+        if (p === 0) ctx.moveTo(cxp, cyp);
+        else ctx.lineTo(cxp, cyp);
+      }
+      ctx.closePath();
+      ctx.fill();
     }
+  };
+
+  // Under-shadow, darkest and lowest, so the crown has weight.
+  cluster(canopyR * 0.4, withAlpha(shift('#1e3a3c'), 0.72), 22, canopyR * 0.82, canopyR * 0.66, 7);
+  // Body.
+  cluster(canopyR * 0.36, withAlpha(shift('#3d6b5c'), 0.86), 26, canopyR * 0.9, canopyR * 0.76, 19);
+  // Moon side, upper left, in smaller and lighter clusters.
+  for (let index = 0; index < 16; index += 1) {
+    const angle = Math.PI * 1.05 + random.range(-0.5, 0.5);
+    const dist = random.range(0.35, 1);
+    const px = x + lean + Math.cos(angle) * canopyR * 0.78 * dist;
+    const py = canopyCy + Math.sin(angle) * canopyR * 0.62 * dist;
+    ctx.fillStyle = withAlpha(index % 3 === 0 ? mixHex('#a8d49a', foliageLit, 0.5) : foliageLit, 0.5);
+    ctx.beginPath();
+    ctx.ellipse(px, py, canopyR * random.range(0.16, 0.27), canopyR * random.range(0.12, 0.2), random.range(-0.6, 0.6), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Gaps where the background shows through. These are what stop the crown
+  // reading as a solid blob: real foliage is mostly holes at this contrast.
+  for (let index = 0; index < 5; index += 1) {
+    const gapX = x + lean + random.range(-canopyR * 0.6, canopyR * 0.6);
+    const gapY = canopyCy + random.range(-canopyR * 0.3, canopyR * 0.5);
+    ctx.fillStyle = withAlpha(shift('#2f5a52'), 0.5);
+    ctx.beginPath();
+    ctx.ellipse(gapX, gapY, canopyR * random.range(0.1, 0.2), canopyR * random.range(0.07, 0.14), random.range(-0.8, 0.8), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Sparse leaf specks along the lit rim, the last painted touch.
+  for (let index = 0; index < 10; index += 1) {
+    const angle = Math.PI * 1.15 + random.range(-0.6, 0.5);
+    circle(
+      ctx,
+      x + lean + Math.cos(angle) * canopyR * random.range(0.7, 1),
+      canopyCy + Math.sin(angle) * canopyR * random.range(0.5, 0.8),
+      random.range(1.6, 3.2),
+      withAlpha(mixHex('#dcf2b0', foliageLit, 0.45), random.range(0.24, 0.5)),
+    );
   }
 }
 
@@ -686,11 +753,12 @@ function drawObstacleCached(
   time: number,
   dpr: number,
   view: PropView | null,
+  zoneId = '',
 ): void {
   // Ponds, flowers and anything else with a live element stay on the direct
   // path. Water ripples and flower sway are part of the scene, not decoration.
   if (!STATIC_PROP_KINDS.has(obstacle.kind) || typeof document === 'undefined') {
-    drawObstacle(ctx, obstacle, save, time);
+    drawObstacle(ctx, obstacle, save, time, zoneId);
     return;
   }
   // Cull before caching, not after: an off-screen prop that still occupies a
@@ -710,11 +778,11 @@ function drawObstacleCached(
       propCtx.translate(-obstacle.x + OBSTACLE_PADDING, -obstacle.y + OBSTACLE_PADDING);
       // Smoke, lantern swing and lit windows are animated overlays; the baked
       // pass draws the static body with time pinned to 0.
-      drawObstacle(propCtx, obstacle, save, 0);
+      drawObstacle(propCtx, obstacle, save, 0, zoneId);
     },
   });
   if (!baked) {
-    drawObstacle(ctx, obstacle, save, time);
+    drawObstacle(ctx, obstacle, save, time, zoneId);
     return;
   }
   ctx.drawImage(
@@ -726,9 +794,9 @@ function drawObstacleCached(
   );
 }
 
-function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle, save: SaveData, time = 0): void {
+function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle, save: SaveData, time = 0, zoneId = ''): void {
   if (obstacle.kind === 'tree') {
-    drawTree(ctx, obstacle);
+    drawTree(ctx, obstacle, zoneId);
     return;
   }
   const x = obstacle.x;
@@ -831,6 +899,11 @@ function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle, sa
     ctx.restore();
 
     // Two piers, one snapped shorter than the other.
+    //
+    // The gradient used to run from a near-white stone straight to dark across a
+    // 20px column, so each pier read as a flat pale slab with no material. The
+    // top of a pier is sky-lit and the shaded side faces the opening, and the
+    // column gets masonry joints so it is clearly built rather than extruded.
     for (const side of [0, 1]) {
       const pierX = side === 0 ? x : x + w - pierW;
       const pierTop = y + (side === 0 ? ruinH * 0.1 : ruinH * 0.28);
@@ -840,7 +913,38 @@ function drawObstacle(ctx: CanvasRenderingContext2D, obstacle: WorldObstacle, sa
         [pierX + pierW * 0.4, pierTop],
         [pierX + pierW, pierTop + ruinH * 0.05],
         [pierX + pierW, y + ruinH],
-      ], linear(ctx, pierX, pierTop, pierX + pierW, y + ruinH, stoneLit, stoneDark), '#0f1c2e', 2.6);
+      ], linear(ctx, pierX, pierTop, pierX + pierW, y + ruinH, '#9aa08b', stoneDark), '#0f1c2e', 2.6);
+      // Masonry joints, drawn clipped so they cannot escape the silhouette.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(pierX - 1, pierTop - ruinH * 0.05, pierW + 2, y + ruinH - pierTop + ruinH * 0.05);
+      ctx.clip();
+      ctx.strokeStyle = withAlpha('#3a4746', 0.32);
+      ctx.lineWidth = 1.1;
+      const pierCourse = (y + ruinH - pierTop) / 4;
+      for (let row = 1; row < 4; row += 1) {
+        const rowY = pierTop + row * pierCourse;
+        ctx.beginPath();
+        ctx.moveTo(pierX, rowY);
+        ctx.lineTo(pierX + pierW, rowY);
+        ctx.stroke();
+      }
+      // A chipped corner, so the pier is broken rather than merely short.
+      ctx.fillStyle = withAlpha(stoneDark, 0.7);
+      ctx.beginPath();
+      ctx.moveTo(pierX + pierW, pierTop + ruinH * 0.24);
+      ctx.lineTo(pierX + pierW - pierW * 0.34, pierTop + ruinH * 0.27);
+      ctx.lineTo(pierX + pierW, pierTop + ruinH * 0.33);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      // Sky-lit top edge, the brightest thing on the stone.
+      ctx.strokeStyle = withAlpha('#e6ddb8', 0.45);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(pierX + pierW * 0.4, pierTop);
+      ctx.lineTo(pierX + pierW, pierTop + ruinH * 0.05);
+      ctx.stroke();
     }
 
     // A lantern still burning inside: the warm focal point of the ruin. It hangs
@@ -1365,13 +1469,100 @@ function drawGroundTexture(ctx: CanvasRenderingContext2D, zone: ZoneDefinition):
     ellipse(ctx, px - size * 0.28, py - size * 0.2, size * 0.48, size * 0.26, withAlpha('#e2ebdf', 0.45));
   }
 
-  ctx.strokeStyle = withAlpha('#f5edcf', 0.08);
-  ctx.lineWidth = 2;
-  for (let x = 90; x < zone.width; x += 120) {
+  // Defined-edge soil patches.
+  //
+  // The soft mottle discs above give large-scale value variation, but on their
+  // own they read as smudges on a plate: at this contrast the eye resolves the
+  // blobs as shapes rather than as ground. Patches with a visible rim and a
+  // slightly darker interior read as terrain, because that is how soil actually
+  // meets grass.
+  const patchRandom = new SeededRandom(seed ^ 0x5f3a);
+  for (let index = 0; index < 26; index += 1) {
+    const px = patchRandom.range(cx - rx * 0.86, cx + rx * 0.86);
+    const py = patchRandom.range(cy - ry * 0.86, cy + ry * 0.86);
+    const prx = patchRandom.range(26, 74);
+    const pry = prx * patchRandom.range(0.44, 0.68);
+    const warm = patchRandom.next() < 0.55;
+    const body = warm ? '#6b6a4e' : '#3c5450';
+    // Rim first, slightly darker, so the patch has an edge.
+    ctx.fillStyle = withAlpha('#22383c', 0.16);
+    ellipse(ctx, px, py, prx, pry, withAlpha('#22383c', 0.13));
+    // Irregular interior so it is not an obvious ellipse.
+    const lobes = 5;
     ctx.beginPath();
-    ctx.moveTo(x, 30);
-    ctx.quadraticCurveTo(x + 35, zone.height * 0.45, x - 15, zone.height - 30);
+    for (let lobe = 0; lobe <= lobes; lobe += 1) {
+      const angle = (lobe / lobes) * Math.PI * 2;
+      const wobble = patchRandom.range(0.78, 1.14);
+      const lx = px + Math.cos(angle) * prx * wobble;
+      const ly = py + Math.sin(angle) * pry * wobble;
+      if (lobe === 0) ctx.moveTo(lx, ly);
+      else ctx.lineTo(lx, ly);
+    }
+    ctx.closePath();
+    ctx.fillStyle = withAlpha(body, 0.13);
+    ctx.fill();
+    // Lit crescent on the moon side, so the patch has a light direction.
+    ctx.strokeStyle = withAlpha('#dfe9c4', 0.11);
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.ellipse(px, py, prx * 0.86, pry * 0.86, -0.42, Math.PI * 1.06, Math.PI * 1.72);
     ctx.stroke();
+  }
+
+  // Baked grass tufts.
+  //
+  // Tufts are what tell the eye this is a meadow rather than a painted plate,
+  // and they are almost free here: the whole pass is baked once into the island
+  // layer, so the count costs a bake and not a frame. Each tuft leans and
+  // carries a lit tip and a shadow root so it sits in the light.
+  const tuftRandom = new SeededRandom(seed ^ 0x2b71);
+  // Grass colour follows the zone. Hardcoded green put bright meadow tufts on
+  // the night island, where they read as green confetti on a blue plate. Mixing
+  // toward the zone's own accent keeps the tufts native to whatever they grow on.
+  const tuftBody = mixHex(zone.groundAlt, zone.id === 'starfall' ? '#6b7fa8' : '#6f9a6c', 0.55);
+  const tuftLit = mixHex(zone.accent, '#e2f0bd', 0.4);
+  const tuftDark = mixHex(zone.ground, '#2c4a44', 0.5);
+  // Clustered, not scattered. An even scatter reads as confetti dropped on a
+  // plate; grass grows in drifts with bare ground between them, so tufts are
+  // placed around a smaller number of centres with a falloff.
+  let tuftIndex = 0;
+  for (let cluster = 0; cluster < 62; cluster += 1) {
+    const ccx = tuftRandom.range(cx - rx * 0.94, cx + rx * 0.94);
+    const ccy = tuftRandom.range(cy - ry * 0.94, cy + ry * 0.94);
+    // Some centres are dense stands, some are a lone tuft fading out.
+    const spread = tuftRandom.range(12, 46);
+    const members = 3 + Math.floor(tuftRandom.next() * 6);
+    for (let member = 0; member < members; member += 1) {
+      tuftIndex += 1;
+      // Gaussian-ish falloff around the centre, so the cluster has a soft edge.
+      const gx = ccx + (tuftRandom.next() + tuftRandom.next() - 1) * spread;
+      const gy = ccy + (tuftRandom.next() + tuftRandom.next() - 1) * spread * 0.6;
+      const blades = 3 + Math.floor(tuftRandom.next() * 3);
+      const height = tuftRandom.range(5, 11);
+      const lean = tuftRandom.range(-0.4, 0.4);
+      const dark = tuftIndex % 4 === 0;
+      // Contact shadow under the clump.
+      ellipse(ctx, gx, gy + 1, height * 0.6, height * 0.2, withAlpha('#16232f', 0.16));
+      for (let blade = 0; blade < blades; blade += 1) {
+        const bladeSpread = (blade / Math.max(1, blades - 1) - 0.5) * height * 0.5;
+        const bladeLean = lean + bladeSpread * 0.03;
+        const tipX = gx + bladeSpread + Math.sin(bladeLean) * height * 0.55;
+        const tipY = gy - height * tuftRandom.range(0.78, 1.1);
+        ctx.strokeStyle = dark
+          ? withAlpha(tuftDark, tuftRandom.range(0.3, 0.46))
+          : withAlpha(tuftRandom.next() < 0.4 ? tuftLit : tuftBody, tuftRandom.range(0.28, 0.44));
+        ctx.lineWidth = tuftRandom.range(0.9, 1.6);
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(gx + bladeSpread * 0.4, gy);
+        ctx.quadraticCurveTo(gx + bladeSpread * 0.8 + Math.sin(bladeLean) * height * 0.2, gy - height * 0.6, tipX, tipY);
+        ctx.stroke();
+      }
+      // A catchlight on the tallest blade, the same moonlight the lighting uses.
+      if (tuftIndex % 5 === 0) {
+        circle(ctx, gx + Math.sin(lean) * height * 0.5, gy - height * 0.9, 1.1, withAlpha(tuftLit, 0.3));
+      }
+    }
   }
   ctx.restore();
 }
@@ -2061,16 +2252,67 @@ function drawZoneProps(ctx: CanvasRenderingContext2D, zone: ZoneDefinition, time
       circle(ctx, x, y, 1, '#fff0b8');
     }
   } else if (zone.id === 'paperwood') {
-    for (let index = 0; index < 5; index += 1) {
-      const x = 120 + index * 190;
-      const y = 300 + Math.sin(index * 1.4) * 26;
-      ctx.strokeStyle = '#4c5a4c';
-      ctx.lineWidth = 2;
+    // Lantern garlands strung between poles.
+    //
+    // This was five flat four-point parallelograms in two flat colours, which
+    // read as debug markers against the painted everything else. The grove is
+    // named for paper lanterns, so the props now say what the place is: poles,
+    // a rope that sags between them, and paper lanterns hanging off it.
+    const poles = 5;
+    const ropeY = (index: number) => 300 + Math.sin(index * 1.4) * 26;
+    // Rope first, so the lanterns hang from it rather than over it.
+    ctx.strokeStyle = withAlpha('#3f4a44', 0.85);
+    ctx.lineWidth = 1.8;
+    for (let index = 0; index < poles - 1; index += 1) {
+      const x0 = 120 + index * 190;
+      const x1 = x0 + 190;
       ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x, y + 74);
+      ctx.moveTo(x0, ropeY(index) + 12);
+      // Catenary sag, so the rope carries weight.
+      ctx.quadraticCurveTo((x0 + x1) / 2, ropeY(index) + 52, x1, ropeY(index + 1) + 12);
       ctx.stroke();
-      pathFill(ctx, [[x, y + 6], [x + 28, y + 16], [x + 22, y + 48], [x - 4, y + 38]], index % 2 ? '#e88470' : '#7ccabc', '#0f1c2e', 2.5);
+    }
+    for (let index = 0; index < poles; index += 1) {
+      const x = 120 + index * 190;
+      const y = ropeY(index);
+      drawShadow(ctx, x, y + 92, 16, 0.22);
+      // Pole with a lean, so the row is not a picket fence.
+      const lean = index % 2 ? 2.5 : -2.5;
+      ctx.strokeStyle = linear(ctx, x - 3, y, x + 3, y + 86, '#6b6250', '#3c443c');
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x, y - 6);
+      ctx.lineTo(x + lean, y + 86);
+      ctx.stroke();
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = withAlpha('#cdbe95', 0.4);
+      ctx.beginPath();
+      ctx.moveTo(x - 1.4, y - 4);
+      ctx.lineTo(x + lean - 1.4, y + 84);
+      ctx.stroke();
+      // Crossarm the rope is tied to.
+      ctx.strokeStyle = '#4f5548';
+      ctx.lineWidth = 3.4;
+      ctx.beginPath();
+      ctx.moveTo(x - 9, y + 11);
+      ctx.lineTo(x + 9, y + 11);
+      ctx.stroke();
+      if (index < poles - 1) {
+        // Two lanterns per gap, alternating warm paper and cool paper.
+        drawHangingLantern(ctx, x + 62, y + 34, 0.6, index % 2 ? '#e88470' : '#f2c86e', time, index * 7);
+        drawHangingLantern(ctx, x + 128, y + 30, 0.52, index % 2 ? '#7ccabc' : '#f2c86e', time, index * 7 + 3);
+      } else {
+        // A streamer on the last pole, so the row does not just stop.
+        pathFill(
+          ctx,
+          [[x + 4, y + 14], [x + 20, y + 20], [x + 15, y + 48], [x + 1, y + 41]],
+          linear(ctx, x + 4, y + 14, x + 20, y + 48, '#e88470', '#a85a4e'),
+          '#0f1c2e',
+          2,
+        );
+        pathFill(ctx, [[x + 5, y + 20], [x + 15, y + 24], [x + 13, y + 38], [x + 4, y + 34]], withAlpha('#f7c9a8', 0.5));
+      }
     }
   } else if (zone.id === 'rainbud') {
     for (let index = 0; index < 8; index += 1) {
@@ -2448,7 +2690,7 @@ export function drawWorldScene(
   for (const obstacle of zone.obstacles) {
     // Kept in the depth sort rather than baked into the island layer: the hero
     // has to be able to pass behind a tree, which a flattened layer cannot do.
-    drawables.push({ y: obstacle.y + obstacle.h, draw: () => drawObstacleCached(ctx, obstacle, save, options.time, options.dpr, propView) });
+    drawables.push({ y: obstacle.y + obstacle.h, draw: () => drawObstacleCached(ctx, obstacle, save, options.time, options.dpr, propView, zone.id) });
   }
   for (const interactable of zone.interactables) {
     drawables.push({

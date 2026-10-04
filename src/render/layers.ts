@@ -48,6 +48,10 @@ let clock = 0;
  * few MB; the shortfall in sharpness is invisible on a surface this soft, and
  * the budget is spent where it shows, on the live sprites.
  */
+// Measured, not guessed: raising this to 4M was tested against a 2M bake at the
+// same framing and the difference was not visible, because the softness in the
+// ground comes from the texture art, not from the backing resolution. Keeping it
+// small leaves the memory for the prop pool, where resolution does show.
 const MAX_LAYER_PIXELS = 2_000_000;
 
 export interface StaticLayerOptions {
