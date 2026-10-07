@@ -284,6 +284,9 @@ export class Game {
           reducedMotion: this.save.settings.reducedMotion,
           intro: this.battle.intro,
           weaponType: this.getWeapon().type,
+          swing: this.battle.swingProgress,
+          swingStep: this.battle.swingStep,
+          weaponColor: this.battle.weaponColor,
         },
       );
     }

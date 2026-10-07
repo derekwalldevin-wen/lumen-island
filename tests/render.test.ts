@@ -8,6 +8,8 @@ import {
   drawMinimap,
   drawTitleScene,
   drawWorldScene,
+  drawSwingTrail,
+  swingPose,
 } from '../src/render/visuals';
 import { createInitialSave, getPlayerStats } from '../src/rules/gameRules';
 import { WorldRuntime } from '../src/world/worldRuntime';
@@ -89,7 +91,9 @@ function baseOptions() {
   // dpr feeds the static layer cache. Under the test recorder there is no
   // document.createElement, so staticLayer returns null and the scene falls
   // back to drawing live, which is exactly the path these tests need to cover.
-  return { time: 3.25, reducedMotion: false, dpr: 1 };
+  // swing 0 means the hero is idle, which is the baseline these tests want;
+  // tests that care about the swing pass their own progress.
+  return { time: 3.25, reducedMotion: false, dpr: 1, swing: 0, swingStep: 0, weaponColor: '#f4c95d' };
 }
 
 describe('render smoke tests', () => {
@@ -233,5 +237,60 @@ describe('render smoke tests', () => {
     // The viewport transform in Game.resize() letterboxes against these values.
     expect(BASE_WIDTH).toBe(480);
     expect(BASE_HEIGHT).toBe(800);
+  });
+});
+
+describe('swing trail', () => {
+  // drawHero cannot be exercised here: fitSprite returns null without a loaded
+  // image, so the hero branch that applies the swing transform is never reached.
+  // The trail is a separate function precisely so the part of the animation that
+  // can be checked without pixels is checked, rather than left entirely unverified.
+  const pose = swingPose(0.4, 0);
+
+  it('draws nothing at all when the trail has faded out', () => {
+    const ctx = asContext();
+    drawSwingTrail(ctx, 240, 430, 0, -1, 1, '#f4c95d', 0, 1.08);
+    expect(countOf(ctx), 'a fully faded trail still issued draw calls').toBe(0);
+  });
+
+  it('tapers the arc out of overlapping segments rather than one plate', () => {
+    // A constant-width crescent reads as translucent glass. Segments are what
+    // give the leading edge its weight.
+    const ctx = asContext();
+    drawSwingTrail(ctx, 240, 430, 0, -1.1, 0.5, '#f4c95d', 0.9, 1.08);
+    // Twelve segment fills plus one leading-edge stroke.
+    expect(countOf(ctx)).toBeGreaterThan(12);
+  });
+
+  it('scales with the figure so the arc stays in proportion in battle', () => {
+    const small = asContext();
+    const large = asContext();
+    drawSwingTrail(small, 240, 430, 0, -1, 1, '#fff', 0.8, 1);
+    drawSwingTrail(large, 240, 430, 0, -1, 1, '#fff', 0.8, 2);
+    // Same call count, so the check has to be on geometry, not volume.
+    expect(countOf(small)).toBe(countOf(large));
+  });
+
+  it('never emits a non-finite coordinate', () => {
+    // The recording context throws on non-finite coordinates, which turns this
+    // into an assertion: a NaN facing or a zero scale would otherwise draw
+    // nothing at all in a real browser and fail silently.
+    for (const facing of [0, Math.PI, -Math.PI / 2, Math.PI * 1.75]) {
+      for (const step of [0, 1, 2]) {
+        const p = swingPose(0.45, step);
+        expect(() =>
+          drawSwingTrail(asContext(), 240, 430, facing, p.trailFrom ?? 0, p.trailTo ?? 0, '#f4c95d', p.trailAlpha, 1.08),
+        ).not.toThrow();
+      }
+    }
+  });
+
+  it('produces a usable arc from every combo step at the strike frame', () => {
+    for (const step of [0, 1, 2]) {
+      const p = swingPose(0.4, step);
+      expect(p.trailFrom, `step ${step} has no arc start`).not.toBeNull();
+      expect(p.trailTo, `step ${step} has no arc end`).not.toBeNull();
+      expect(p.trailAlpha, `step ${step} arc is invisible at the strike frame`).toBeGreaterThan(0.1);
+    }
   });
 });

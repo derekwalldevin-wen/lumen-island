@@ -45,6 +45,163 @@ interface HeroVisual {
   scale?: number;
   moving?: boolean;
   invulnerable?: boolean;
+  /** Normalised swing progress, 0 when idle and 1 when the swing has finished. */
+  swing?: number;
+  /** Which blow of the three-hit combo this is. */
+  swingStep?: number;
+  /** Colour of the weapon arc. */
+  swingColor?: string;
+}
+
+/**
+ * Where the weapon arc starts and ends, in radians relative to facing.
+ *
+ * Three visibly different sweeps. The combo already advanced through three
+ * steps, but every step drew the same arc in the same direction, so the combo
+ * read as three identical pokes. A horizontal sweep, a rising backhand and an
+ * overhead chop are distinguishable at a glance even in a crowded arena.
+ */
+const SWING_ARCS: ReadonlyArray<readonly [number, number]> = [
+  [-1.15, 0.55],
+  [1.05, -0.85],
+  [-1.62, 0.14],
+];
+
+/** Fractions of the swing spent winding up, striking, and settling. */
+const SWING_WINDUP = 0.26;
+const SWING_IMPACT = 0.44;
+const SWING_SETTLE = 0.66;
+
+export interface SwingPose {
+  /** Forward offset along facing, in pixels. Negative while winding up. */
+  lunge: number;
+  /** Body twist in radians, positive tips toward the swing's leading edge. */
+  twist: number;
+  /** Impact squash, subtracted from height and added to width. */
+  squash: number;
+  /** Arc start and end relative to facing, or null when no trail is drawn. */
+  trailFrom: number | null;
+  trailTo: number | null;
+  trailAlpha: number;
+}
+
+/**
+ * The pose of a swing at a point in its progress.
+ *
+ * Keyframed rather than eased from a single curve, because the shape of the
+ * motion is the whole point: a wind-up that eases out, a strike that accelerates
+ * into the target, and a settle that overshoots slightly past neutral. A single
+ * ease-in-out gives a motion that reads as a slide rather than as a blow.
+ */
+export function swingPose(progress: number, step: number): SwingPose {
+  const idle: SwingPose = { lunge: 0, twist: 0, squash: 0, trailFrom: null, trailTo: null, trailAlpha: 0 };
+  if (!(progress > 0) || progress >= 1) return idle;
+  const arcs = SWING_ARCS;
+  const arc = arcs[((step % arcs.length) + arcs.length) % arcs.length] ?? arcs[0]!;
+  const travel = Math.sign(arc[1] - arc[0]) || 1;
+
+  let lunge = 0;
+  let twist = 0;
+  let squash = 0;
+
+  if (progress < SWING_WINDUP) {
+    // Wind up: coil back and away from the direction of the blow.
+    const t = progress / SWING_WINDUP;
+    const ease = t * t;
+    lunge = -7 * ease;
+    twist = -0.13 * ease * travel;
+  } else if (progress < SWING_IMPACT) {
+    // Strike. Ease out, so the weapon accelerates into the target instead of
+    // starting fast and coasting, which is what a symmetric ease would give.
+    const t = (progress - SWING_WINDUP) / (SWING_IMPACT - SWING_WINDUP);
+    const eased = 1 - (1 - t) * (1 - t);
+    lunge = -7 + 24 * eased;
+    twist = (0.2 * eased - 0.13) * travel;
+    squash = Math.sin(t * Math.PI) * 0.07;
+  } else if (progress < SWING_SETTLE) {
+    const t = (progress - SWING_IMPACT) / (SWING_SETTLE - SWING_IMPACT);
+    lunge = 17 * (1 - t) * (1 - t);
+    twist = 0.2 * (1 - t) * (1 - t) * travel;
+    squash = 0.035 * (1 - t);
+  } else {
+    // Settle: drift a little past neutral, then home. Without the overshoot the
+    // hero visibly stops dead at the end of every blow.
+    const t = (progress - SWING_SETTLE) / (1 - SWING_SETTLE);
+    const decay = (1 - t) * (1 - t);
+    lunge = 3.4 * decay;
+    twist = -0.05 * decay * travel;
+  }
+
+  // The trail only exists while the weapon is actually moving. It sweeps with
+  // the strike and then holds its shape while fading, so the arc stays readable
+  // for a few frames after the blade has stopped instead of vanishing.
+  let trailFrom: number | null = null;
+  let trailTo: number | null = null;
+  let trailAlpha = 0;
+  if (progress >= SWING_WINDUP && progress <= 0.88) {
+    if (progress < SWING_IMPACT) {
+      const t = Math.max(0, Math.min(1, (progress - (SWING_WINDUP - 0.06)) / (SWING_IMPACT - SWING_WINDUP + 0.06)));
+      trailFrom = arc[0];
+      trailTo = arc[0] + (arc[1] - arc[0]) * t;
+      trailAlpha = Math.min(1, t * 1.6) * 0.9;
+    } else {
+      const fade = 1 - (progress - SWING_IMPACT) / (0.88 - SWING_IMPACT);
+      trailFrom = arc[0];
+      trailTo = arc[1];
+      trailAlpha = Math.max(0, fade) * 0.85;
+    }
+  }
+
+  return { lunge, twist, squash, trailFrom, trailTo, trailAlpha };
+}
+
+/**
+ * The weapon arc, drawn behind the figure so the hero sits in front of it.
+ *
+ * Built from overlapping arc segments rather than one filled crescent so the
+ * trail can taper: thick at the leading edge, thin where the blade left. A
+ * constant-width crescent reads as a translucent plate rather than as motion.
+ */
+export function drawSwingTrail(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  facing: number,
+  from: number,
+  to: number,
+  color: string,
+  alpha: number,
+  scale: number,
+): void {
+  if (alpha <= 0.01) return;
+  const inner = 26 * scale;
+  const outer = 78 * scale;
+  const cy = y - 20 * scale;
+  const segments = 12;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let index = 0; index < segments; index += 1) {
+    const t0 = index / segments;
+    const t1 = (index + 1) / segments;
+    const a0 = facing + from + (to - from) * t0;
+    const a1 = facing + from + (to - from) * t1;
+    // Taper from the leading edge backwards.
+    const weight = (1 - t0) * 0.72 + 0.24;
+    ctx.fillStyle = withAlpha(color, alpha * weight * 0.24);
+    ctx.beginPath();
+    ctx.arc(x, cy, outer, a0, a1);
+    ctx.arc(x, cy, inner + (outer - inner) * (1 - t0) * 0.25, a1, a0, true);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // Bright leading edge, so the eye can tell which way the blade was going.
+  ctx.strokeStyle = withAlpha('#fff4d0', alpha * 0.5);
+  ctx.lineWidth = 2 * scale;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(x, cy, outer - 2 * scale, facing + to - Math.sign(to - from) * 0.18, facing + to);
+  ctx.stroke();
+  ctx.restore();
 }
 
 interface WorldVisualOptions {
@@ -66,6 +223,12 @@ interface BattleVisualOptions {
   reducedMotion: boolean;
   intro: number;
   weaponType: WeaponType;
+  /** Normalised hero swing progress, 0 when idle. */
+  swing: number;
+  /** Which blow of the three-hit combo the swing belongs to. */
+  swingStep: number;
+  /** Colour of the weapon arc. */
+  weaponColor: string;
 }
 
 function withAlpha(hex: string, alpha: number): string {
@@ -412,7 +575,31 @@ export function drawHero(ctx: CanvasRenderingContext2D, visual: HeroVisual): voi
   // as two weapons and buried the face.
   const heroSprite = fitSprite('hero', 96 * scale, 1, 96 * scale * 1.05);
   if (heroSprite) {
+    // Swing transform. The delivered art is one painted still, so there are no
+    // frames to cycle: the motion has to come from moving, twisting and
+    // squashing the whole figure. Rotating around the feet is what makes it read
+    // as a body pivoting rather than as a picture sliding across the floor.
+    const swing = swingPose(visual.swing ?? 0, visual.swingStep ?? 0);
+    const lungeX = Math.cos(visual.facing) * swing.lunge * scale;
+    const lungeY = Math.sin(visual.facing) * swing.lunge * scale;
+    // Trail first, so the figure sits in front of its own arc.
+    if (swing.trailFrom !== null && swing.trailTo !== null) {
+      drawSwingTrail(
+        ctx,
+        visual.x + lungeX,
+        visual.y + lungeY,
+        visual.facing,
+        swing.trailFrom,
+        swing.trailTo,
+        visual.swingColor ?? '#f4c95d',
+        swing.trailAlpha,
+        scale,
+      );
+    }
     ctx.save();
+    ctx.translate(visual.x + lungeX, visual.y + lungeY);
+    if (swing.twist !== 0) ctx.rotate(swing.twist);
+    if (swing.squash !== 0) ctx.scale(1 + swing.squash, 1 - swing.squash);
     if (hurt && Math.floor(visual.walkPhase * 12) % 2 === 0) ctx.globalAlpha = 0.48;
     if (!facingRight) {
       ctx.translate(visual.x, 0);
@@ -425,11 +612,12 @@ export function drawHero(ctx: CanvasRenderingContext2D, visual: HeroVisual): voi
     ctx.restore();
     // Rim light last, over the whole figure: the painted art has its own baked
     // lighting, and without a scene-consistent edge on top the hero still reads
-    // as a sticker pasted onto the ground.
+    // as a sticker pasted onto the ground. Offset by the lunge so the edge stays
+    // on the figure instead of hanging where the hero was standing.
     drawCharacterRimLight(
       ctx,
-      visual.x,
-      visual.y + bob - 32 * scale,
+      visual.x + lungeX,
+      visual.y + lungeY + bob - 32 * scale,
       30 * scale,
       Math.max(0, Math.min(1, (visual.flame - 20) / 60)),
       '#ffd98a',
@@ -3702,6 +3890,9 @@ export function drawBattleScene(
         scale: 1.08,
         moving: Math.hypot(entry.entity.vx, entry.entity.vy) > 5,
         invulnerable: options.intro > 0,
+        swing: options.swing,
+        swingStep: options.swingStep,
+        swingColor: options.weaponColor,
       });
     } else {
       if (entry.entity.telegraphTimer > 0) {

@@ -1,4 +1,4 @@
-import { ENEMIES } from '../data';
+import { ENEMIES, SWING_DURATION } from '../data';
 import { SeededRandom } from '../core/rng';
 import { damageRoll, flameMultiplier, flameStage } from '../rules/gameRules';
 import type {
@@ -105,6 +105,16 @@ export class BattleRuntime {
   private skillCooldown = 0;
   private attackTimer = 0;
   private comboStep = 0;
+  /**
+   * Swing animation, as a countdown rather than a progress value.
+   *
+   * Countdown because the update loop already decays every other timer the same
+   * way, and because a swing that gets interrupted should just stop rather than
+   * need its progress invalidated at each call site.
+   */
+  swingTimer = 0;
+  /** Which blow of the combo the current swing belongs to. */
+  swingStep = 0;
   private dodgeDirection: Vec2 = { x: 0, y: -1 };
   private pendingHits = 0;
   private firstHitAt = -1;
@@ -140,6 +150,8 @@ export class BattleRuntime {
     this.skillCooldown = 0;
     this.attackTimer = 0;
     this.comboStep = 0;
+    this.swingTimer = 0;
+    this.swingStep = 0;
     this.pendingHits = 0;
 
     this.hero = {
@@ -228,6 +240,7 @@ export class BattleRuntime {
     }
 
     this.attackTimer = Math.max(0, this.attackTimer - safeDelta);
+    this.swingTimer = Math.max(0, this.swingTimer - safeDelta);
     this.dodgeCooldown = Math.max(0, this.dodgeCooldown - safeDelta);
     this.skillCooldown = Math.max(0, this.skillCooldown - safeDelta);
     this.heroInvulnerable = Math.max(0, this.heroInvulnerable - safeDelta);
@@ -352,6 +365,7 @@ export class BattleRuntime {
         kind: 'spark',
       });
       this.addParticles(this.hero.x + Math.cos(angle) * 28, this.hero.y - 18 + Math.sin(angle) * 28, this.weapon.color, 5, 'spark');
+      this.beginSwing();
     } else {
       this.pendingHits = 0;
       for (const enemy of this.enemies) {
@@ -367,7 +381,34 @@ export class BattleRuntime {
       this.flame = Math.max(0, this.flame - (this.pendingHits > 0 ? 0 : 2.5));
       if (this.pendingHits === 0) this.combo = 0;
       this.addSlash(this.hero.facing, this.comboStep);
+      // Started after the combo step advances, so the arc matches the blow the
+      // player just watched land rather than lagging one step behind it.
+      this.beginSwing();
     }
+  }
+
+  /**
+   * Start the swing animation for the blow that is resolving now.
+   *
+   * Held attack buttons re-trigger faster than the animation at the quickest
+   * weapon, so a swing already in flight is not restarted: cutting the wind-up
+   * short every frame would leave the hero permanently mid-anticipation and the
+   * strike would never actually be seen.
+   */
+  private beginSwing(): void {
+    this.swingTimer = SWING_DURATION;
+    this.swingStep = this.comboStep;
+  }
+
+  /** Normalised swing progress for the renderer: 0 when idle, 1 when done. */
+  get swingProgress(): number {
+    if (this.swingTimer <= 0) return 0;
+    return 1 - this.swingTimer / SWING_DURATION;
+  }
+
+  /** Colour of the weapon arc, so the trail matches the weapon in hand. */
+  get weaponColor(): string {
+    return this.weapon.color;
   }
 
   private performSkill(): void {

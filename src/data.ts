@@ -10,6 +10,21 @@ import type {
 
 export const SAVE_VERSION = 1;
 
+/**
+ * One hero swing, in seconds, from wind-up to settled.
+ *
+ * Lives here rather than in the renderer because both ends need it and must agree:
+ * the battle runtime counts the swing down, and the renderer maps that countdown
+ * onto a pose. If either side had its own copy they would drift apart and the
+ * figure would freeze partway through the animation.
+ *
+ * Long enough to read as a motion, short enough to stay responsive. At the
+ * fastest weapon the attack cooldown is a little over a third of a second, so a
+ * longer swing would still be recovering when the next blow starts and a held
+ * attack button would smear the three into one.
+ */
+export const SWING_DURATION = 0.34;
+
 export const MATERIALS: Record<string, MaterialDefinition> = {
   cloudFluff: { id: 'cloudFluff', name: '云绒', color: '#f4ead1', description: '柔软发光，可为器物保温。' },
   lampPaper: { id: 'lampPaper', name: '灯纸', color: '#f4c95d', description: '浸过星油的暖色纸纤维。' },
