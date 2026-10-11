@@ -34,8 +34,23 @@ class RecordingContext {
   lineDashOffset = 0;
   calls = 0;
   private path: unknown = null;
+  private arcLog: Array<{ r: number; s: number; e: number }> = [];
+
+  /** Every arc issued since the last reset, with its radius and angular span. */
+  arcs(): Array<{ r: number; sweep: number }> {
+    return this.arcLog.map((arc) => ({ r: arc.r, sweep: Math.abs(arc.e - arc.s) }));
+  }
+
+  reset(): void {
+    this.arcLog.length = 0;
+  }
 
   private track(name: string, args: unknown[]): void {
+    if (name === 'arc') {
+      // track receives [x, r, startAngle, endAngle] for arcs.
+      const [, r, s, e] = args as [number, number, number, number];
+      this.arcLog.push({ r, s, e });
+    }
     this.calls += 1;
     for (const arg of args) {
       if (typeof arg === 'number' && !Number.isFinite(arg)) {
@@ -58,7 +73,7 @@ class RecordingContext {
   lineTo(x: number, y: number): void { this.track('lineTo', [x, y]); }
   quadraticCurveTo(cx: number, cy: number, x: number, y: number): void { this.track('quadraticCurveTo', [cx, cy, x, y]); }
   bezierCurveTo(a: number, b: number, c: number, d: number, e: number, f: number): void { this.track('bezierCurveTo', [a, b, c, d, e, f]); }
-  arc(x: number, y: number, r: number, s: number, e: number): void { this.track('arc', [x, y, r, s, e]); }
+  arc(x: number, _y: number, r: number, s: number, e: number): void { this.track('arc', [x, r, s, e]); }
   arcTo(a: number, b: number, c: number, d: number, r: number): void { this.track('arcTo', [a, b, c, d, r]); }
   ellipse(x: number, y: number, rx: number, ry: number, _r: number, s: number, e: number): void { this.track('ellipse', [x, y, rx, ry, s, e]); }
   rect(x: number, y: number, w: number, h: number): void { this.track('rect', [x, y, w, h]); }
@@ -251,6 +266,36 @@ describe('swing trail', () => {
     const ctx = asContext();
     drawSwingTrail(ctx, 240, 430, 0, -1, 1, '#f4c95d', 0, 1.08);
     expect(countOf(ctx), 'a fully faded trail still issued draw calls').toBe(0);
+  });
+
+  it('sweeps a short arc and never wraps the long way round', () => {
+    // ctx.arc walks forward from start to end unless told otherwise, so an arc
+    // whose angles descend filled a near-complete disc instead of a blade sweep.
+    // The backhand combo step descends, so this is the case that actually broke.
+    const recorder = asContext() as unknown as RecordingContext;
+    for (const step of [0, 1, 2]) {
+      const p = swingPose(0.36, step);
+      recorder.calls = 0;
+      recorder.reset();
+      drawSwingTrail(recorder as unknown as CanvasRenderingContext2D, 240, 430, 0, p.trailFrom!, p.trailTo!, '#f4c95d', p.trailAlpha, 1.08);
+      const arcs = recorder.arcs();
+      expect(arcs.length, `step ${step} drew no arcs`).toBeGreaterThan(0);
+      for (const arc of arcs) {
+        // A wrapped sweep spans more than pi in the wrong direction.
+        expect(arc.sweep, `step ${step} swept ${arc.sweep} rad`).toBeLessThanOrEqual(Math.PI + 0.001);
+      }
+    }
+  });
+
+  it('keeps the arc inside a blade-sized radius rather than an aura', () => {
+    const recorder = asContext() as unknown as RecordingContext;
+    const p = swingPose(0.36, 0);
+    drawSwingTrail(recorder as unknown as CanvasRenderingContext2D, 240, 430, 0, p.trailFrom!, p.trailTo!, '#fff', 0.9, 1.08);
+    // The hero is about 96px tall; a trail far wider than that reads as a glow
+    // around the fighter rather than as a weapon passing through the air.
+    for (const arc of recorder.arcs()) {
+      expect(arc.r, 'trail radius is larger than the figure').toBeLessThan(80);
+    }
   });
 
   it('tapers the arc out of overlapping segments rather than one plate', () => {

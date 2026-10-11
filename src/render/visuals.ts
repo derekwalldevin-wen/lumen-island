@@ -174,8 +174,8 @@ export function drawSwingTrail(
   scale: number,
 ): void {
   if (alpha <= 0.01) return;
-  const inner = 26 * scale;
-  const outer = 78 * scale;
+  const inner = 22 * scale;
+  const outer = 62 * scale;
   const cy = y - 20 * scale;
   const segments = 12;
   ctx.save();
@@ -183,23 +183,31 @@ export function drawSwingTrail(
   for (let index = 0; index < segments; index += 1) {
     const t0 = index / segments;
     const t1 = (index + 1) / segments;
-    const a0 = facing + from + (to - from) * t0;
-    const a1 = facing + from + (to - from) * t1;
-    // Taper from the leading edge backwards.
+    const p0 = facing + from + (to - from) * t0;
+    const p1 = facing + from + (to - from) * t1;
+    // Always sweep from the lower angle to the higher one. ctx.arc walks forward
+    // from start to end unless told otherwise, so a backhand swing whose angles
+    // descend wrapped the long way round and filled the disc instead of the arc.
+    const lo = Math.min(p0, p1);
+    const hi = Math.max(p0, p1);
+    // Taper from the leading edge backwards, keyed on position along the sweep
+    // rather than on the angle, so it stays correct in either direction.
     const weight = (1 - t0) * 0.72 + 0.24;
-    ctx.fillStyle = withAlpha(color, alpha * weight * 0.24);
+    ctx.fillStyle = withAlpha(color, alpha * weight * 0.32);
     ctx.beginPath();
-    ctx.arc(x, cy, outer, a0, a1);
-    ctx.arc(x, cy, inner + (outer - inner) * (1 - t0) * 0.25, a1, a0, true);
+    ctx.arc(x, cy, outer, lo, hi);
+    ctx.arc(x, cy, inner + (outer - inner) * (1 - t0) * 0.3, hi, lo, true);
     ctx.closePath();
     ctx.fill();
   }
   // Bright leading edge, so the eye can tell which way the blade was going.
-  ctx.strokeStyle = withAlpha('#fff4d0', alpha * 0.5);
+  const edge = facing + to;
+  const tip = facing + to - Math.sign(to - from) * 0.2;
+  ctx.strokeStyle = withAlpha('#fff4d0', alpha * 0.6);
   ctx.lineWidth = 2 * scale;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.arc(x, cy, outer - 2 * scale, facing + to - Math.sign(to - from) * 0.18, facing + to);
+  ctx.arc(x, cy, outer - 2 * scale, Math.min(tip, edge), Math.max(tip, edge));
   ctx.stroke();
   ctx.restore();
 }
@@ -597,18 +605,23 @@ export function drawHero(ctx: CanvasRenderingContext2D, visual: HeroVisual): voi
       );
     }
     ctx.save();
+    // Pivot at the hero's own feet, so the twist rotates the body instead of
+    // swinging the whole scene, and the sprite is then drawn at x 0.
+    //
+    // Passing visual.x to drawSprite as well would apply the position twice:
+    // once as this translate and once inside drawSprite. That put the hero at
+    // canvas y 1666 on a 1212-tall canvas, so it was drawn off-screen and only
+    // the shadow and the lantern glow were visible. The unit tests could not
+    // catch it because fitSprite returns null with no image loaded, so this
+    // branch never runs under test.
     ctx.translate(visual.x + lungeX, visual.y + lungeY);
     if (swing.twist !== 0) ctx.rotate(swing.twist);
     if (swing.squash !== 0) ctx.scale(1 + swing.squash, 1 - swing.squash);
     if (hurt && Math.floor(visual.walkPhase * 12) % 2 === 0) ctx.globalAlpha = 0.48;
-    if (!facingRight) {
-      ctx.translate(visual.x, 0);
-      ctx.scale(-1, 1);
-      drawSprite(ctx, heroSprite, 0, visual.y + bob + 4);
-    } else {
-      drawSprite(ctx, heroSprite, visual.x, visual.y + bob + 4);
-    }
-    drawHeroWeaponBadge(ctx, visual.weaponType, visual.flame, visual.x, visual.y + bob, scale, facingRight);
+    // Mirror about the hero's own axis, which is now the origin.
+    if (!facingRight) ctx.scale(-1, 1);
+    drawSprite(ctx, heroSprite, 0, bob + 4);
+    drawHeroWeaponBadge(ctx, visual.weaponType, visual.flame, 0, bob, scale, facingRight);
     ctx.restore();
     // Rim light last, over the whole figure: the painted art has its own baked
     // lighting, and without a scene-consistent edge on top the hero still reads
