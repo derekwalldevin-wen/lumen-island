@@ -4,6 +4,11 @@
 > 最后更新：2026-10-11（挥砍动画上线 + 两个渲染 bug 修复）
 > 线上：https://derekwalldevin-wen.github.io/lumen-island/
 
+**这份文档不在网页上。** GitHub Pages 只发布 `./dist`，
+所以 https://derekwalldevin-wen.github.io/lumen-island/HANDOVER.md 会返回 404，这是正常的。
+文档在源码仓库里：`github.com/derekwalldevin-wen/lumen-island/HANDOVER.md`，
+本地在 `lumen-island-quest\HANDOVER.md`。
+
 ---
 
 ## 0. 三十秒版本
